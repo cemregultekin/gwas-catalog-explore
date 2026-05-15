@@ -111,7 +111,7 @@ if st.button("🚀 Run Harmonization & Comparison", type="primary"):
                     st.plotly_chart(fig, use_container_width=True)
                     
                     st.subheader("Harmonized Dataset")
-                    st.dataframe(merged[['rsid', 'ea', 'nea', 'b_S1', 'harmonized_b_S2', 'eaf_S1', 'harmonized_eaf_S2', 'p_S1']], use_container_width=True)
+                    st.dataframe(merged[['rsid', 'ea_S1', 'nea_S1', 'b_S1', 'harmonized_b_S2', 'eaf_S1', 'harmonized_eaf_S2', 'p_S1']], use_container_width=True)
                     
                 else:
                     status.update(label="No matches found.", state="error")
