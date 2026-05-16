@@ -79,12 +79,17 @@ if not df.empty:
             require_sum_stats = st.checkbox("Only show studies with Full Summary Statistics", value=False)
             
             submitted = st.form_submit_button("🚀 Apply & Visualize")
+            
+        # 🛠️ GİZLİ HAFIZA TETİKLEYİCİSİ: Butona basıldığında durumu hafızaya kaydet
+        if submitted:
+            st.session_state["form_submitted"] = True
         
     # SAĞ PANEL: GÖRSELLEŞTİRME VE TABLOLAR
     with col2:
         st.subheader("📊 Results & Analytics")
         
-        if submitted:
+        # 🛠️ KRİTİK DEĞİŞİKLİK: Sadece 'submitted' kontrolü değil, hafıza durumunu kontrol et
+        if st.session_state.get("form_submitted", False):
             # 1. Filtreleri Uygula
             res = df.copy()
             
@@ -140,7 +145,7 @@ if not df.empty:
                 
                 display_df = res.drop(columns=['Extract_Year', 'N_Size']).head(100)
                 
-                # --- SİHİRLİ SEÇİM TABLOSU EKLENDİ ---
+                # --- SİHİRLİ SEÇİM TABLOSU ---
                 selection = st.dataframe(
                     display_df, 
                     use_container_width=True,
@@ -151,13 +156,11 @@ if not df.empty:
                 selected_rows = selection.get("selection", {}).get("rows", [])
 
                 if len(selected_rows) == 2:
-                    # EBI dosyasındaki Accession ID sütununu dinamik olarak buluyoruz
                     id_col = [col for col in display_df.columns if 'ACCESSION' in col.upper() or 'ID' in col.upper()][0]
                     
                     study_1_raw = str(display_df.iloc[selected_rows[0]][id_col])
                     study_2_raw = str(display_df.iloc[selected_rows[1]][id_col])
                     
-                    # EBI GWAS Catalog ID'lerini (GCST) otomatik olarak OpenGWAS formatına (ebi-a-GCST) çeviriyoruz
                     study_1_id = f"ebi-a-{study_1_raw}" if study_1_raw.startswith("GCST") else study_1_raw
                     study_2_id = f"ebi-a-{study_2_raw}" if study_2_raw.startswith("GCST") else study_2_raw
                     
