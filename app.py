@@ -110,7 +110,6 @@ if not df.empty:
                 v_col1, v_col2 = st.columns(2)
                 
                 with v_col1:
-                    # Popülasyon veya En Büyük Çalışmalar Pasta Grafiği
                     if not selected_ancestries and not searched_ancestry:
                         res['Broad_Ancestry'] = "Other/Mixed"
                         for anc in major_ancestries:
@@ -128,7 +127,6 @@ if not df.empty:
                     st.plotly_chart(fig_pie, use_container_width=True)
 
                 with v_col2:
-                    # Yıllara Göre Yayın Trendi Çizgi Grafiği
                     year_counts = res['Extract_Year'].value_counts().sort_index().reset_index()
                     year_counts.columns = ['Year', 'Count']
                     fig_line = px.line(year_counts, x='Year', y='Count', 
@@ -136,20 +134,51 @@ if not df.empty:
                                        markers=True, line_shape="spline")
                     st.plotly_chart(fig_line, use_container_width=True)
 
-                # 3. İnteraktif Tablo ve İndirme
+                # 3. İnteraktif Tablo, Seçim ve İndirme
                 st.write(f"**Total Studies Found:** {len(res)}")
-                st.info("💡 Showing first 100 rows for preview. Use the button below to download the full dataset.")
+                st.info("💡 Showing first 100 rows for preview. **Select exactly TWO studies** from the table to unlock cross-population analysis.")
                 
-                display_df = res.drop(columns=['Extract_Year', 'N_Size'])
-                st.dataframe(display_df.head(100), use_container_width=True)
+                display_df = res.drop(columns=['Extract_Year', 'N_Size']).head(100)
                 
-                csv_data = display_df.to_csv(index=False).encode('utf-8')
+                # --- SİHİRLİ SEÇİM TABLOSU EKLENDİ ---
+                selection = st.dataframe(
+                    display_df, 
+                    use_container_width=True,
+                    on_select="rerun",
+                    selection_mode="multi-row"
+                )
+                
+                selected_rows = selection.get("selection", {}).get("rows", [])
+
+                if len(selected_rows) == 2:
+                    # EBI dosyasındaki Accession ID sütununu dinamik olarak buluyoruz
+                    id_col = [col for col in display_df.columns if 'ACCESSION' in col.upper() or 'ID' in col.upper()][0]
+                    
+                    study_1_raw = str(display_df.iloc[selected_rows[0]][id_col])
+                    study_2_raw = str(display_df.iloc[selected_rows[1]][id_col])
+                    
+                    # EBI GWAS Catalog ID'lerini (GCST) otomatik olarak OpenGWAS formatına (ebi-a-GCST) çeviriyoruz
+                    study_1_id = f"ebi-a-{study_1_raw}" if study_1_raw.startswith("GCST") else study_1_raw
+                    study_2_id = f"ebi-a-{study_2_raw}" if study_2_raw.startswith("GCST") else study_2_raw
+                    
+                    st.success(f"Selected Studies for Analysis: **{study_1_id}** and **{study_2_id}**")
+                    
+                    if st.button("🚀 Go Further Analysis & Compare", type="primary"):
+                        st.session_state["auto_study_1"] = study_1_id
+                        st.session_state["auto_study_2"] = study_2_id
+                        st.switch_page("pages/2_⚖️_Compare_GWAS.py")
+                        
+                elif len(selected_rows) > 2:
+                    st.warning("⚠️ Please select exactly 2 studies for comparison.")
+
+                # İndirme Butonu
+                csv_data = res.drop(columns=['Extract_Year', 'N_Size']).to_csv(index=False).encode('utf-8')
                 st.download_button(
                     label="📥 Download Full Filtered Dataset (CSV)",
                     data=csv_data,
                     file_name=f"gwas_filtered_results.csv",
                     mime='text/csv',
-                    type="primary"
+                    type="secondary"
                 )
             else:
                 st.warning("⚠️ No data matches the selected criteria. Please loosen your filters.")
