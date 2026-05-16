@@ -11,28 +11,36 @@ st.set_page_config(page_title="Compare GWAS", page_icon="⚖️", layout="wide")
 st.title("⚖️ GWAS Cross-Population Comparison")
 st.markdown("Harmonize and compare Summary Statistics (Beta & EAF) between two different GWAS datasets using the OpenGWAS API.")
 
-# --- API AUTHENTICATION (GİZLİ KASA) ---
+# --- API AUTHENTICATION (SECRETS) ---
 try:
-    # Streamlit sunucusundaki güvenli kasadan token'ı otomatik okur
+    # Automatically read the token from Streamlit's secure secrets
     api_token = st.secrets["OPENGWAS_TOKEN"]
 except Exception:
-    st.error("⚠️ API yapılandırması eksik. Lütfen Streamlit Secrets üzerinden 'OPENGWAS_TOKEN' ayarını yapın.")
+    st.error("⚠️ API configuration is missing. Please set the 'OPENGWAS_TOKEN' in Streamlit Secrets.")
     st.stop()
 
-# --- KULLANICI GİRİŞ PANELİ ---
+# --- USER INPUT PANEL (SESSION STATE INTEGRATED) ---
+# Retrieve IDs from session state if redirected from Explorer, otherwise use defaults
+default_id1 = st.session_state.get("auto_study_1", "ebi-a-GCST90018739")
+default_id2 = st.session_state.get("auto_study_2", "ieu-a-89")
+
 col1, col2, col3 = st.columns(3)
 with col1:
-    id1 = st.text_input("Study 1 ID (e.g., ebi-a-GCST90018739)", "ebi-a-GCST90018739")
+    id1 = st.text_input("Study 1 ID (Base Model)", value=default_id1)
     st.caption("Base Study (Top Hits will be extracted from here)")
 with col2:
-    id2 = st.text_input("Study 2 ID (e.g., ieu-a-89)", "ieu-a-89")
+    id2 = st.text_input("Study 2 ID (Target Model)", value=default_id2)
     st.caption("Target Study (Full Summary Stats required)")
 with col3:
     snp_limit = st.number_input("Max SNPs to Compare", min_value=50, max_value=1000, value=500, step=50)
 
+# Clear session state to allow manual entry without getting stuck in a loop upon reload
+if "auto_study_1" in st.session_state:
+    del st.session_state["auto_study_1"]
+    del st.session_state["auto_study_2"]
+
 if st.button("🚀 Run Harmonization & Comparison", type="primary"):
     base_url = "https://api.opengwas.io/api"
-    # Token kullanıcıdan değil, sistemden otomatik geliyor
     headers = {"Authorization": f"Bearer {api_token}", "Accept": "application/json"}
 
     with st.status("Running Bioinformatics Pipeline...", expanded=True) as status:
