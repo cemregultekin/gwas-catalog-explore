@@ -20,20 +20,33 @@ except Exception:
     st.stop()
 
 # --- USER INPUT PANEL (SESSION STATE INTEGRATED) ---
-# Retrieve IDs from session state if redirected from Explorer, otherwise use defaults
-default_id1 = st.session_state.get("auto_study_1", "ebi-a-GCST90018739")
-default_id2 = st.session_state.get("auto_study_2", "ieu-a-89")
+
+# 1. Eğer Explorer sayfasından yönlendirmeyle geldiysek, ID'leri widget hafızasına aktar ve köprüyü temizle
+if "auto_study_1" in st.session_state:
+    st.session_state["id1_input"] = st.session_state["auto_study_1"]
+    st.session_state["id2_input"] = st.session_state["auto_study_2"]
+    del st.session_state["auto_study_1"]
+    del st.session_state["auto_study_2"]
+
+# 2. Eğer sayfaya doğrudan girildiyse ve hafıza boşsa, varsayılan ID'leri ayarla
+if "id1_input" not in st.session_state:
+    st.session_state["id1_input"] = "ebi-a-GCST90018739"
+if "id2_input" not in st.session_state:
+    st.session_state["id2_input"] = "ieu-a-89"
 
 col1, col2, col3 = st.columns(3)
 with col1:
-    id1 = st.text_input("Study 1 ID (Base Model)", value=default_id1)
+    # 'value' YERİNE 'key' KULLANIYORUZ! Böylece butona basıldığında silinmez.
+    id1 = st.text_input("Study 1 ID (Base Model)", key="id1_input")
     st.caption("Base Study (Top Hits will be extracted from here)")
 with col2:
-    id2 = st.text_input("Study 2 ID (Target Model)", value=default_id2)
+    id2 = st.text_input("Study 2 ID (Target Model)", key="id2_input")
     st.caption("Target Study (Full Summary Stats required)")
 with col3:
     snp_limit = st.number_input("Max SNPs to Compare", min_value=50, max_value=1000, value=500, step=50)
 
+# (BURADAN SONRAKI "if st.button..." ILE BASLAYAN ANALIZ KODUN AYNI KALACAK. 
+# SADECE ESKİ KODDAKİ "if 'auto_study_1' in st.session_state: del..." KISMINI SİLDİĞİNDEN EMİN OL.)
 # Clear session state to allow manual entry without getting stuck in a loop upon reload
 if "auto_study_1" in st.session_state:
     del st.session_state["auto_study_1"]
