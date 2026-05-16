@@ -156,7 +156,7 @@ if not df.empty:
                 selected_rows = selection.get("selection", {}).get("rows", [])
 
                 if len(selected_rows) == 2:
-                    id_col = [col for col in display_df.columns if 'ACCESSION' in col.upper() or 'ID' in col.upper()][0]
+                    id_col = [col for col in display_df.columns if 'ACCESSION' in col.upper()][0]
                     
                     study_1_raw = str(display_df.iloc[selected_rows[0]][id_col])
                     study_2_raw = str(display_df.iloc[selected_rows[1]][id_col])
