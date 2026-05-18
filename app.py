@@ -6,35 +6,40 @@ import os
 import re
 import requests
 
-# --- SAYFA AYARLARI ---
+# --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="GWAS Catalog Explorer", layout="wide", page_icon="🧬")
 
 st.title("🧬 GWAS Catalog Explorer")
 st.markdown("Automated lookup for the latest GWAS studies directly from EBI servers. Filter existing datasets, explore ancestry distributions, and prepare data for portability or PRS studies.")
 
-# --- SECRETS CHECK ---
+# --- SECRETS CONFIGURATION CHECK ---
 try:
     api_token = st.secrets["OPENGWAS_TOKEN"]
 except Exception:
     st.error("⚠️ API configuration is missing. Please set 'OPENGWAS_TOKEN' in Streamlit Secrets.")
     st.stop()
 
-# --- VERİ İNDİRME VE İŞLEME (Bulut Uyumlu) ---
+# --- DATA DOWNLOAD AND PROCESSING (Cloud Compatible) ---
 @st.cache_data
 def load_data():
+    # Live comprehensive EBI GWAS Catalog endpoint
     url = "https://www.ebi.ac.uk/gwas/api/search/downloads/studies/v1.0.2.1"
     local_file = "gwas_data.tsv"
     
+    # Downloads file from EBI servers if it does not exist locally
     if not os.path.exists(local_file):
         with st.spinner('Downloading the latest comprehensive GWAS data from EBI servers (this happens only once)...'):
             urllib.request.urlretrieve(url, local_file)
             
+    # Read the data
     df = pd.read_csv(local_file, sep='\t', low_memory=False)
     df.columns = df.columns.str.strip()
     
+    # Extract Publication Year
     date_col = [col for col in df.columns if 'date' in col.lower()][0]
     df['Extract_Year'] = pd.to_datetime(df[date_col], errors='coerce').dt.year
     
+    # Convert Initial Sample Size text description into a clean numerical value (N_Size)
     def get_n(text):
         nums = re.findall(r'[0-9]+(?:,[0-9]+)*', str(text))
         if nums:
@@ -44,13 +49,14 @@ def load_data():
     df['N_Size'] = df['INITIAL SAMPLE SIZE'].apply(get_n)
     return df
 
+# Load Data
 try:
     df = load_data()
 except Exception as e:
     st.error(f"Failed to fetch data from EBI. Error: {e}")
     st.stop()
 
-# --- ARAYÜZ VE MANTIK ---
+# --- INTERFACE AND LOGIC ---
 if not df.empty:
     trait_col = [col for col in df.columns if 'trait' in col.lower() or 'disease' in col.lower()][0]
     sample_col = 'INITIAL SAMPLE SIZE'
@@ -58,6 +64,7 @@ if not df.empty:
     
     col1, col2 = st.columns([1, 4]) 
     
+    # LEFT PANEL: FILTERS FORM
     with col1:
         st.header("🛠️ Filters")
         
@@ -81,13 +88,16 @@ if not df.empty:
             
             submitted = st.form_submit_button("🚀 Apply & Visualize")
         
+        # Persist submission state in Session State to prevent table data wipeouts upon row selection
         if submitted:
             st.session_state["form_submitted"] = True
         
+    # RIGHT PANEL: ANALYTICS, CHARTS & GEOGRAPHY
     with col2:
         st.subheader("📊 Results & Analytics")
         
         if st.session_state.get("form_submitted", False):
+            # 1. Apply Filtering Logic
             res = df.copy()
             
             if selected_trait != "All":
@@ -107,8 +117,9 @@ if not df.empty:
                 if sum_stats_col in res.columns:
                     res = res[res[sum_stats_col].astype(str).str.lower().str.contains('yes', na=False)]
             
+            # 2. Render Analytics Views
             if not res.empty:
-                # SEKME (TABS) YAPISI EKLENDİ - Daha temiz bir görünüm için
+                # Dynamic Tabbed View Layout
                 tab_charts, tab_map = st.tabs(["📈 Statistical Charts", "🌍 Global Distribution Map"])
                 
                 with tab_charts:
@@ -139,59 +150,82 @@ if not df.empty:
                         st.plotly_chart(fig_line, use_container_width=True)
 
                 with tab_map:
-                    st.markdown("##### 📍 Geographic Heatmap of Cohort Origins")
-                    st.caption("Data extracted via NLP from sample descriptions. Highlights the regions where samples were collected.")
+                    st.markdown("##### 📍 Geographic Distribution of Study Cohorts (Regional & Country Level)")
+                    st.caption("Mapped using precise country coordinates where available, with regional fallbacks for broad ancestries (e.g., European -> Central Europe). Bubble sizes represent Sample Size (N).")
                     
-                    # NLP TEXT MINING SÖZLÜĞÜ (Ülke -> ISO-3 Kod)
-                    country_mapping = {
-                        'UK': 'GBR', 'United Kingdom': 'GBR', 'British': 'GBR',
-                        'US': 'USA', 'USA': 'USA', 'United States': 'USA', 'American': 'USA',
-                        'Japan': 'JPN', 'Japanese': 'JPN', 'China': 'CHN', 'Chinese': 'CHN', 'Taiwan': 'TWN',
-                        'Iceland': 'ISL', 'Icelandic': 'ISL', 'Finland': 'FIN', 'Finnish': 'FIN', 
-                        'Denmark': 'DNK', 'Danish': 'DNK', 'Sweden': 'SWE', 'Swedish': 'SWE', 
-                        'Norway': 'NOR', 'Norwegian': 'NOR', 'Germany': 'DEU', 'German': 'DEU', 
-                        'France': 'FRA', 'French': 'FRA', 'Korea': 'KOR', 'Korean': 'KOR', 
-                        'India': 'IND', 'Indian': 'IND', 'Africa': 'ZAF', 'African': 'ZAF', 
-                        'Australia': 'AUS', 'Australian': 'AUS', 'Canada': 'CAN', 'Canadian': 'CAN',
-                        'Netherlands': 'NLD', 'Dutch': 'NLD', 'Italy': 'ITA', 'Italian': 'ITA',
-                        'Spain': 'ESP', 'Spanish': 'ESP', 'Brazil': 'BRA', 'Brazilian': 'BRA',
-                        'Estonia': 'EST', 'Estonian': 'EST', 'Mexico': 'MEX', 'Mexican': 'MEX'
+                    # GEOGRAPHIC COORDINATE REGEX DICTIONARY (Specific Countries & Continental Fallbacks)
+                    geo_mapping = {
+                        # Exact Country Pinpoints
+                        'UK': {'lat': 55.3781, 'lon': -3.4360, 'name': 'United Kingdom'},
+                        'United Kingdom': {'lat': 55.3781, 'lon': -3.4360, 'name': 'United Kingdom'},
+                        'US': {'lat': 37.0902, 'lon': -95.7129, 'name': 'United States'},
+                        'United States': {'lat': 37.0902, 'lon': -95.7129, 'name': 'United States'},
+                        'Japan': {'lat': 36.2048, 'lon': 138.2529, 'name': 'Japan'},
+                        'China': {'lat': 35.8617, 'lon': 104.1954, 'name': 'China'},
+                        'Finland': {'lat': 61.9241, 'lon': 25.7482, 'name': 'Finland'},
+                        'Iceland': {'lat': 64.9631, 'lon': -19.0208, 'name': 'Iceland'},
+                        'Sweden': {'lat': 60.1282, 'lon': 18.6435, 'name': 'Sweden'},
+                        
+                        # Broad Ancestry Core Centroids (Fallbacks for text strings without exact countries)
+                        'European': {'lat': 50.1109, 'lon': 8.6821, 'name': 'Europe (Broad Ancestry)'},
+                        'East Asian': {'lat': 34.0479, 'lon': 100.6197, 'name': 'East Asia (Broad Ancestry)'},
+                        'African': {'lat': 1.6508, 'lon': 22.5644, 'name': 'Africa (Broad Ancestry)'},
+                        'South Asian': {'lat': 20.5937, 'lon': 78.9629, 'name': 'South Asia (Broad Ancestry)'},
+                        'Latino': {'lat': -14.6048, 'lon': -57.6562, 'name': 'Latin America (Broad Ancestry)'},
+                        'Hispanic': {'lat': -14.6048, 'lon': -57.6562, 'name': 'Latin America (Broad Ancestry)'}
                     }
 
-                    # Metinden ülke kodu çıkarma
-                    res_map = res.copy()
-                    res_map['ISO_Code'] = None
-                    
-                    for word, code in country_mapping.items():
-                        # Tam kelime eşleşmesi arar (Örn: "US" bulur ama "VIRUS" içindeki US'i almaz)
-                        mask = res_map[sample_col].astype(str).str.contains(r'\b' + word + r'\b', case=False, regex=True)
-                        # Daha önce atanmamışsa ata
-                        res_map.loc[mask & res_map['ISO_Code'].isnull(), 'ISO_Code'] = code
+                    map_rows = []
+                    for idx, row in res.iterrows():
+                        sample_text = str(row[sample_col])
+                        n_size = row['N_Size']
+                        
+                        found_specific = False
+                        # 1. Step: Primary search for country level pinpoints
+                        for key, geo in geo_mapping.items():
+                            if key in sample_text and key not in ['European', 'East Asian', 'African', 'South Asian', 'Latino', 'Hispanic']:
+                                map_rows.append({'Region': geo['name'], 'Latitude': geo['lat'], 'Longitude': geo['lon'], 'N_Size': n_size})
+                                found_specific = True
+                                break
+                        
+                        # 2. Step: Secondary fallback search for broad regional continents
+                        if not found_specific:
+                            for key, geo in geo_mapping.items():
+                                if key in sample_text:
+                                    map_rows.append({'Region': geo['name'], 'Latitude': geo['lat'], 'Longitude': geo['lon'], 'N_Size': n_size})
+                                    break
 
-                    # Harita verisini grupla
-                    map_data = res_map.groupby('ISO_Code')['N_Size'].sum().reset_index()
+                    if map_rows:
+                        map_df = pd.DataFrame(map_rows)
+                        # Aggregate sample sizes belonging to same coordinates
+                        map_data = map_df.groupby(['Region', 'Latitude', 'Longitude'])['N_Size'].sum().reset_index()
 
-                    if not map_data.empty:
-                        fig_map = px.choropleth(
-                            map_data, 
-                            locations="ISO_Code",
-                            color="N_Size",
-                            hover_name="ISO_Code",
-                            color_continuous_scale=px.colors.sequential.Plasma,
+                        # Draw Scatter Geo Bubble Visual
+                        fig_map = px.scatter_geo(
+                            map_data,
+                            lat="Latitude",
+                            lon="Longitude",
+                            size="N_Size",
+                            hover_name="Region",
+                            size_max=35,
                             projection="natural earth",
+                            color="N_Size",
+                            color_continuous_scale=px.colors.sequential.Plasma,
+                            template="plotly_white"
                         )
-                        fig_map.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, geo=dict(showcoastlines=True))
+                        fig_map.update_layout(margin={"r":0,"t":40,"l":0,"b":0}, geo=dict(showland=True, landcolor="#F4F4F4"))
                         st.plotly_chart(fig_map, use_container_width=True)
                     else:
-                        st.info("🗺️ No specific country data could be extracted for the selected cohort.")
+                        st.info("🗺️ No geographic or ancestry-based location data could be extracted for this trait.")
 
-                # 3. İnteraktif Tablo ve Seçim Köprüsü
+                # 3. INTERACTIVE DATAFRAME & INTEGRATED PORTAL BRIDGE
                 st.markdown("---")
                 st.write(f"**Total Studies Found:** {len(res)}")
                 st.info("💡 Showing first 100 rows for preview. **Select exactly TWO studies** from the table to unlock cross-population analysis.")
                 
                 display_df = res.drop(columns=['Extract_Year', 'N_Size']).head(100)
                 
+                # Render Selection Table
                 selection = st.dataframe(
                     display_df, 
                     use_container_width=True,
@@ -202,16 +236,19 @@ if not df.empty:
                 selected_rows = selection.get("selection", {}).get("rows", [])
 
                 if len(selected_rows) == 2:
+                    # Explicit column target to avoid grabbing PubMedID accidentally
                     id_col = 'STUDY ACCESSION'
                     
                     study_1_raw = str(display_df.iloc[selected_rows[0]][id_col])
                     study_2_raw = str(display_df.iloc[selected_rows[1]][id_col])
                     
+                    # Auto format identifiers for OpenGWAS API compatibility
                     study_1_id = f"ebi-a-{study_1_raw}" if study_1_raw.startswith("GCST") else study_1_raw
                     study_2_id = f"ebi-a-{study_2_raw}" if study_2_raw.startswith("GCST") else study_2_raw
                     
                     st.success(f"Selected Studies: **{study_1_id}** and **{study_2_id}**")
                     
+                    # --- LIVE OPENGWAS DATABASE VALIDATION BRIDGE ---
                     if st.button("🚀 Go Further Analysis & Compare", type="primary"):
                         with st.spinner("Verifying availability in OpenGWAS database..."):
                             try:
@@ -227,10 +264,12 @@ if not df.empty:
                                     if study_2_id not in available_studies: missing.append(study_2_id)
                                     
                                     if not missing:
+                                        # Success: Write identifiers into session state and switch pages smoothly
                                         st.session_state["auto_study_1"] = study_1_id
                                         st.session_state["auto_study_2"] = study_2_id
                                         st.switch_page("pages/2_⚖️_Compare_GWAS.py")
                                     else:
+                                        # Warn the user cleanly if a study is missing from OpenGWAS index
                                         st.error(f"⚠️ Unable to proceed. The following study/studies are not indexed or fully processed in OpenGWAS yet: {', '.join(missing)}. Please select different studies.")
                                 else:
                                     st.error("⚠️ OpenGWAS server responded with an error. Please try again later.")
@@ -240,6 +279,7 @@ if not df.empty:
                 elif len(selected_rows) > 2:
                     st.warning("⚠️ Please select exactly 2 studies for comparison.")
 
+                # Download Results Button
                 csv_data = res.drop(columns=['Extract_Year', 'N_Size']).to_csv(index=False).encode('utf-8')
                 st.download_button(
                     label="📥 Download Full Filtered Dataset (CSV)",
