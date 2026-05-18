@@ -5,7 +5,7 @@ import urllib.request
 import os
 import re
 import requests
-import numpy as np # Koordinat varyasyonu için gerekli
+import numpy as np
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="GWAS Catalog Explorer", layout="wide", page_icon="🧬")
@@ -150,13 +150,12 @@ if not df.empty:
                                            markers=True, line_shape="spline")
                         st.plotly_chart(fig_line, use_container_width=True)
 
-               with tab_map:
+                with tab_map:
                     st.markdown("##### 📍 Geographic Distribution of Study Cohorts (Regional & Country Level)")
-                    st.caption("Mapped using unique study-level points with jittering. Highlighted regions represent broad ancestry fallback centroids (e.g., European -> Central Europe). Bubble sizes are log-scaled represent Sample Size (N).")
+                    st.caption("Mapped using unique study-level points with jittering. Highlighted regions represent broad ancestry fallback centroids (e.g., European -> Central Europe). Bubble sizes are scaled relative to Sample Size (N).")
                     
-                    # 📍 GEOGRAPHIC COORDINATE DICTIONARY (Exact Countries & Continental Fallbacks)
+                    # GEOGRAPHIC COORDINATE DICTIONARY (Exact Countries & Continental Fallbacks)
                     geo_mapping = {
-                        # Exact Country Pinpoints
                         'UK': {'lat': 55.3781, 'lon': -3.4360, 'name': 'United Kingdom'},
                         'United Kingdom': {'lat': 55.3781, 'lon': -3.4360, 'name': 'United Kingdom'},
                         'US': {'lat': 37.0902, 'lon': -95.7129, 'name': 'United States'},
@@ -166,8 +165,6 @@ if not df.empty:
                         'Finland': {'lat': 61.9241, 'lon': 25.7482, 'name': 'Finland'},
                         'Iceland': {'lat': 64.9631, 'lon': -19.0208, 'name': 'Iceland'},
                         'Sweden': {'lat': 60.1282, 'lon': 18.6435, 'name': 'Sweden'},
-                        
-                        # Broad Ancestry Core Centroids (Fallbacks for text strings without exact countries)
                         'European': {'lat': 50.1109, 'lon': 8.6821, 'name': 'Europe (Broad Ancestry)'},
                         'East Asian': {'lat': 34.0479, 'lon': 100.6197, 'name': 'East Asia (Broad Ancestry)'},
                         'African': {'lat': 1.6508, 'lon': 22.5644, 'name': 'Africa (Broad Ancestry)'},
@@ -176,60 +173,83 @@ if not df.empty:
                         'Hispanic': {'lat': -14.6048, 'lon': -57.6562, 'name': 'Latin America (Broad Ancestry)'}
                     }
 
-                    # --- KRİTİK DEĞİŞİKLİK: GRUPLAMAYI KALDIRIYORUZ VE JITTERING EKLİYORUZ ---
-                    # map_rows_jittered adında yeni bir liste oluşturup bireysel çalışmaları atacağız
                     map_rows_jittered = []
                     for idx, row in res.iterrows():
                         sample_text = str(row[sample_col])
                         n_size = row['N_Size']
+                        trait = str(row[trait_col])
+                        author = str(row[author_col])
+                        year = int(row['Extract_Year']) if pd.notnull(row['Extract_Year']) else "Unknown"
+                        accession = str(row.get('STUDY ACCESSION', 'Unknown'))
                         
-                        found_specific = False
-                        # Önce geo_mapping mantığına göre koordinatları ve bölgeyi bul
+                        lat, lon, region = None, None, None
+                        
+                        # 1. Step: Primary search for country level pinpoints
                         for key, geo in geo_mapping.items():
                             if key in sample_text and key not in ['European', 'East Asian', 'African', 'South Asian', 'Latino', 'Hispanic']:
                                 lat, lon, region = geo['lat'], geo['lon'], geo['name']
-                                found_specific = True
                                 break
-                        if not found_specific:
+                        
+                        # 2. Step: Secondary fallback search for broad regional continents
+                        if lat is None:
                             for key, geo in geo_mapping.items():
                                 if key in sample_text:
                                     lat, lon, region = geo['lat'], geo['lon'], geo['name']
                                     break
-                        
-                        # Hafif bir jittering uygula (örneğin 0.05 derecelik rastgele kayma)
-                        jitter_amount = 0.05
-                        lat_jittered = lat + np.random.uniform(-jitter_amount, jitter_amount)
-                        lon_jittered = lon + np.random.uniform(-jitter_amount, jitter_amount)
-                        
-                        map_rows_jittered.append({'Region': region, 'Latitude': lat_jittered, 'Longitude': lon_jittered, 'N_Size': n_size})
+
+                        # 3. Apply jittering and append if coordinates found
+                        if lat is not None:
+                            # 1.5 degrees of jitter spreads points apart enough to see clusters
+                            jitter_amount = 1.5 
+                            lat_jittered = lat + np.random.uniform(-jitter_amount, jitter_amount)
+                            lon_jittered = lon + np.random.uniform(-jitter_amount, jitter_amount)
+                            
+                            map_rows_jittered.append({
+                                'Region': region, 
+                                'Latitude': lat_jittered, 
+                                'Longitude': lon_jittered, 
+                                'N_Size': n_size,
+                                'Trait': trait,
+                                'Author': author,
+                                'Year': year,
+                                'STUDY ACCESSION': accession
+                            })
 
                     map_data = pd.DataFrame(map_rows_jittered)
 
                     if not map_data.empty:
-                        # Logaritmik veya karekök ölçeklendirme kullanarak düşük N çalışmalarını görünür kıl
-                        # st.number_input yerine kodun içinde yapmak daha adil
-                        map_data['size_normalized'] = np.sqrt(map_data['N_Size']) # Karekök ölçeklendirme
-                        # Alternatif log: map_data['size_normalized'] = np.log1p(map_data['N_Size'])
+                        # Log/Sqrt scaling to make low N studies visible without giant N dominating
+                        map_data['size_normalized'] = np.sqrt(map_data['N_Size']) 
 
-                        # 🌐 Kabarcık Haritasını (Scatter Geo) Bireysel Çalışmalarla Çiziyoruz
+                        # Draw Scatter Geo Bubble Visual with individual study points
                         fig_map = px.scatter_geo(
-                            map_data, # Gruplanmamış veri çerçevesini kullan
+                            map_data,
                             lat="Latitude",
                             lon="Longitude",
-                            size="size_normalized", # Normalleştirilmiş boyutu kullan
+                            size="size_normalized",
                             hover_name="Region",
-                            hover_data={'N_Size': ':,'}, # Fare üzerine gelince gerçek N_Size'ı göster
-                            size_max=15, # Maksimum boyutu önemli ölçüde azalt (örneğin 15-20)
+                            hover_data={
+                                'N_Size': ':,', 
+                                'Latitude': False, 
+                                'Longitude': False, 
+                                'size_normalized': False,
+                                'Trait': True,
+                                'Author': True,
+                                'Year': True,
+                                'STUDY ACCESSION': True
+                            },
+                            size_max=15, # Keeps bubbles from overlapping the entire continent
                             projection="natural earth",
-                            color="N_Size", # Örneklem boyutuna göre renk kodlaması
+                            color="N_Size",
                             color_continuous_scale=px.colors.sequential.Plasma,
                             template="plotly_white",
-                            opacity=0.6 # Çakışmaları daha iyi görmek için opaklığı artır
+                            opacity=0.7
                         )
                         fig_map.update_layout(margin={"r":0,"t":40,"l":0,"b":0}, geo=dict(showland=True, landcolor="#F4F4F4"))
                         st.plotly_chart(fig_map, use_container_width=True)
-                    else:st.info("🗺️ No geographic or ancestry-based location data could be extracted for this trait.")
-                        
+                    else:
+                        st.info("🗺️ No geographic or ancestry-based location data could be extracted for this trait.")
+
                 # 3. INTERACTIVE DATAFRAME & INTEGRATED PORTAL BRIDGE
                 st.markdown("---")
                 st.write(f"**Total Studies Found:** {len(res)}")
@@ -248,7 +268,6 @@ if not df.empty:
                 selected_rows = selection.get("selection", {}).get("rows", [])
 
                 if len(selected_rows) == 2:
-                    # Explicit column target to avoid grabbing PubMedID accidentally
                     id_col = 'STUDY ACCESSION'
                     
                     study_1_raw = str(display_df.iloc[selected_rows[0]][id_col])
@@ -281,7 +300,6 @@ if not df.empty:
                                         st.session_state["auto_study_2"] = study_2_id
                                         st.switch_page("pages/2_⚖️_Compare_GWAS.py")
                                     else:
-                                        # Warn the user cleanly if a study is missing from OpenGWAS index
                                         st.error(f"⚠️ Unable to proceed. The following study/studies are not indexed or fully processed in OpenGWAS yet: {', '.join(missing)}. Please select different studies.")
                                 else:
                                     st.error("⚠️ OpenGWAS server responded with an error. Please try again later.")
