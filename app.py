@@ -22,24 +22,19 @@ except Exception:
 # --- VERİ İNDİRME VE İŞLEME (Bulut Uyumlu) ---
 @st.cache_data
 def load_data():
-    # EBI GWAS Catalog API Güncel Linki
     url = "https://www.ebi.ac.uk/gwas/api/search/downloads/studies/v1.0.2.1"
     local_file = "gwas_data.tsv"
     
-    # Sunucuda dosya yoksa internetten indirir (Sadece ilk girişte çalışır)
     if not os.path.exists(local_file):
         with st.spinner('Downloading the latest comprehensive GWAS data from EBI servers (this happens only once)...'):
             urllib.request.urlretrieve(url, local_file)
             
-    # Veriyi oku
     df = pd.read_csv(local_file, sep='\t', low_memory=False)
     df.columns = df.columns.str.strip()
     
-    # Yıl sütununu ayıkla
     date_col = [col for col in df.columns if 'date' in col.lower()][0]
     df['Extract_Year'] = pd.to_datetime(df[date_col], errors='coerce').dt.year
     
-    # Örneklem sayısını (N) metinden saf sayıya çevir
     def get_n(text):
         nums = re.findall(r'[0-9]+(?:,[0-9]+)*', str(text))
         if nums:
@@ -49,7 +44,6 @@ def load_data():
     df['N_Size'] = df['INITIAL SAMPLE SIZE'].apply(get_n)
     return df
 
-# Veriyi Yükle
 try:
     df = load_data()
 except Exception as e:
@@ -64,7 +58,6 @@ if not df.empty:
     
     col1, col2 = st.columns([1, 4]) 
     
-    # SOL PANEL: FİLTRELER
     with col1:
         st.header("🛠️ Filters")
         
@@ -88,16 +81,13 @@ if not df.empty:
             
             submitted = st.form_submit_button("🚀 Apply & Visualize")
         
-        # Form tıklandığında durumu session_state hafızasına alarak sıfırlanmayı engelliyoruz
         if submitted:
             st.session_state["form_submitted"] = True
         
-    # SAĞ PANEL: GÖRSELLEŞTİRME VE TABLOLAR
     with col2:
         st.subheader("📊 Results & Analytics")
         
         if st.session_state.get("form_submitted", False):
-            # 1. Filtreleri Uygula
             res = df.copy()
             
             if selected_trait != "All":
@@ -117,42 +107,91 @@ if not df.empty:
                 if sum_stats_col in res.columns:
                     res = res[res[sum_stats_col].astype(str).str.lower().str.contains('yes', na=False)]
             
-            # 2. Sonuçları Çizdir
             if not res.empty:
-                v_col1, v_col2 = st.columns(2)
+                # SEKME (TABS) YAPISI EKLENDİ - Daha temiz bir görünüm için
+                tab_charts, tab_map = st.tabs(["📈 Statistical Charts", "🌍 Global Distribution Map"])
                 
-                with v_col1:
-                    if not selected_ancestries and not searched_ancestry:
-                        res['Broad_Ancestry'] = "Other/Mixed"
-                        for anc in major_ancestries:
-                            res.loc[res[sample_col].str.contains(anc, case=False, na=False), 'Broad_Ancestry'] = anc
-                        
-                        fig_pie = px.pie(res, names='Broad_Ancestry', values='N_Size', 
-                                     title="Sample Size (N) Distribution by Ancestry",
-                                     hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
-                    else:
-                        top_studies = res.nlargest(10, 'N_Size')
-                        fig_pie = px.pie(top_studies, names=author_col, values='N_Size', 
-                                     title="Top 10 Studies by Sample Size (N)",
-                                     hole=0.4, color_discrete_sequence=px.colors.qualitative.Safe)
-                        
-                    st.plotly_chart(fig_pie, use_container_width=True)
+                with tab_charts:
+                    v_col1, v_col2 = st.columns(2)
+                    with v_col1:
+                        if not selected_ancestries and not searched_ancestry:
+                            res['Broad_Ancestry'] = "Other/Mixed"
+                            for anc in major_ancestries:
+                                res.loc[res[sample_col].str.contains(anc, case=False, na=False), 'Broad_Ancestry'] = anc
+                            
+                            fig_pie = px.pie(res, names='Broad_Ancestry', values='N_Size', 
+                                         title="Sample Size (N) Distribution by Ancestry",
+                                         hole=0.4, color_discrete_sequence=px.colors.qualitative.Pastel)
+                        else:
+                            top_studies = res.nlargest(10, 'N_Size')
+                            fig_pie = px.pie(top_studies, names=author_col, values='N_Size', 
+                                         title="Top 10 Studies by Sample Size (N)",
+                                         hole=0.4, color_discrete_sequence=px.colors.qualitative.Safe)
+                            
+                        st.plotly_chart(fig_pie, use_container_width=True)
 
-                with v_col2:
-                    year_counts = res['Extract_Year'].value_counts().sort_index().reset_index()
-                    year_counts.columns = ['Year', 'Count']
-                    fig_line = px.line(year_counts, x='Year', y='Count', 
-                                       title="Studies Published Over Time",
-                                       markers=True, line_shape="spline")
-                    st.plotly_chart(fig_line, use_container_width=True)
+                    with v_col2:
+                        year_counts = res['Extract_Year'].value_counts().sort_index().reset_index()
+                        year_counts.columns = ['Year', 'Count']
+                        fig_line = px.line(year_counts, x='Year', y='Count', 
+                                           title="Studies Published Over Time",
+                                           markers=True, line_shape="spline")
+                        st.plotly_chart(fig_line, use_container_width=True)
+
+                with tab_map:
+                    st.markdown("##### 📍 Geographic Heatmap of Cohort Origins")
+                    st.caption("Data extracted via NLP from sample descriptions. Highlights the regions where samples were collected.")
+                    
+                    # NLP TEXT MINING SÖZLÜĞÜ (Ülke -> ISO-3 Kod)
+                    country_mapping = {
+                        'UK': 'GBR', 'United Kingdom': 'GBR', 'British': 'GBR',
+                        'US': 'USA', 'USA': 'USA', 'United States': 'USA', 'American': 'USA',
+                        'Japan': 'JPN', 'Japanese': 'JPN', 'China': 'CHN', 'Chinese': 'CHN', 'Taiwan': 'TWN',
+                        'Iceland': 'ISL', 'Icelandic': 'ISL', 'Finland': 'FIN', 'Finnish': 'FIN', 
+                        'Denmark': 'DNK', 'Danish': 'DNK', 'Sweden': 'SWE', 'Swedish': 'SWE', 
+                        'Norway': 'NOR', 'Norwegian': 'NOR', 'Germany': 'DEU', 'German': 'DEU', 
+                        'France': 'FRA', 'French': 'FRA', 'Korea': 'KOR', 'Korean': 'KOR', 
+                        'India': 'IND', 'Indian': 'IND', 'Africa': 'ZAF', 'African': 'ZAF', 
+                        'Australia': 'AUS', 'Australian': 'AUS', 'Canada': 'CAN', 'Canadian': 'CAN',
+                        'Netherlands': 'NLD', 'Dutch': 'NLD', 'Italy': 'ITA', 'Italian': 'ITA',
+                        'Spain': 'ESP', 'Spanish': 'ESP', 'Brazil': 'BRA', 'Brazilian': 'BRA',
+                        'Estonia': 'EST', 'Estonian': 'EST', 'Mexico': 'MEX', 'Mexican': 'MEX'
+                    }
+
+                    # Metinden ülke kodu çıkarma
+                    res_map = res.copy()
+                    res_map['ISO_Code'] = None
+                    
+                    for word, code in country_mapping.items():
+                        # Tam kelime eşleşmesi arar (Örn: "US" bulur ama "VIRUS" içindeki US'i almaz)
+                        mask = res_map[sample_col].astype(str).str.contains(r'\b' + word + r'\b', case=False, regex=True)
+                        # Daha önce atanmamışsa ata
+                        res_map.loc[mask & res_map['ISO_Code'].isnull(), 'ISO_Code'] = code
+
+                    # Harita verisini grupla
+                    map_data = res_map.groupby('ISO_Code')['N_Size'].sum().reset_index()
+
+                    if not map_data.empty:
+                        fig_map = px.choropleth(
+                            map_data, 
+                            locations="ISO_Code",
+                            color="N_Size",
+                            hover_name="ISO_Code",
+                            color_continuous_scale=px.colors.sequential.Plasma,
+                            projection="natural earth",
+                        )
+                        fig_map.update_layout(margin={"r":0,"t":0,"l":0,"b":0}, geo=dict(showcoastlines=True))
+                        st.plotly_chart(fig_map, use_container_width=True)
+                    else:
+                        st.info("🗺️ No specific country data could be extracted for the selected cohort.")
 
                 # 3. İnteraktif Tablo ve Seçim Köprüsü
+                st.markdown("---")
                 st.write(f"**Total Studies Found:** {len(res)}")
                 st.info("💡 Showing first 100 rows for preview. **Select exactly TWO studies** from the table to unlock cross-population analysis.")
                 
                 display_df = res.drop(columns=['Extract_Year', 'N_Size']).head(100)
                 
-                # İnteraktif Seçim Tablosu
                 selection = st.dataframe(
                     display_df, 
                     use_container_width=True,
@@ -163,7 +202,6 @@ if not df.empty:
                 selected_rows = selection.get("selection", {}).get("rows", [])
 
                 if len(selected_rows) == 2:
-                    # PubMed hatasını önlemek için doğrudan STUDY ACCESSION sütununu hedefliyoruz
                     id_col = 'STUDY ACCESSION'
                     
                     study_1_raw = str(display_df.iloc[selected_rows[0]][id_col])
@@ -174,11 +212,9 @@ if not df.empty:
                     
                     st.success(f"Selected Studies: **{study_1_id}** and **{study_2_id}**")
                     
-                    # --- AKILLI OPEN_GWAS KONTROLÜ (VALIDATION) ---
                     if st.button("🚀 Go Further Analysis & Compare", type="primary"):
                         with st.spinner("Verifying availability in OpenGWAS database..."):
                             try:
-                                # OpenGWAS info ucuna iki ID'yi de soruyoruz
                                 check_url = "https://api.opengwas.io/api/gwasinfo"
                                 headers = {"Authorization": f"Bearer {api_token}", "Accept": "application/json"}
                                 check_res = requests.post(check_url, json={"id": [study_1_id, study_2_id]}, headers=headers)
@@ -186,18 +222,15 @@ if not df.empty:
                                 if check_res.status_code == 200:
                                     available_studies = [item['id'] for item in check_res.json()]
                                     
-                                    # İki ID de veritabanında var mı kontrolü
                                     missing = []
                                     if study_1_id not in available_studies: missing.append(study_1_id)
                                     if study_2_id not in available_studies: missing.append(study_2_id)
                                     
                                     if not missing:
-                                        # İkisi de varsa pürüzsüz geçiş yapıyoruz
                                         st.session_state["auto_study_1"] = study_1_id
                                         st.session_state["auto_study_2"] = study_2_id
                                         st.switch_page("pages/2_⚖️_Compare_GWAS.py")
                                     else:
-                                        # Eksik olanı kullanıcıya İngilizce olarak kibarca bildiriyoruz
                                         st.error(f"⚠️ Unable to proceed. The following study/studies are not indexed or fully processed in OpenGWAS yet: {', '.join(missing)}. Please select different studies.")
                                 else:
                                     st.error("⚠️ OpenGWAS server responded with an error. Please try again later.")
@@ -207,7 +240,6 @@ if not df.empty:
                 elif len(selected_rows) > 2:
                     st.warning("⚠️ Please select exactly 2 studies for comparison.")
 
-                # İndirme Butonu
                 csv_data = res.drop(columns=['Extract_Year', 'N_Size']).to_csv(index=False).encode('utf-8')
                 st.download_button(
                     label="📥 Download Full Filtered Dataset (CSV)",
