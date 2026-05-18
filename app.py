@@ -4,12 +4,20 @@ import plotly.express as px
 import urllib.request
 import os
 import re
+import requests
 
 # --- SAYFA AYARLARI ---
 st.set_page_config(page_title="GWAS Catalog Explorer", layout="wide", page_icon="🧬")
 
 st.title("🧬 GWAS Catalog Explorer")
 st.markdown("Automated lookup for the latest GWAS studies directly from EBI servers. Filter existing datasets, explore ancestry distributions, and prepare data for portability or PRS studies.")
+
+# --- SECRETS CHECK ---
+try:
+    api_token = st.secrets["OPENGWAS_TOKEN"]
+except Exception:
+    st.error("⚠️ API configuration is missing. Please set 'OPENGWAS_TOKEN' in Streamlit Secrets.")
+    st.stop()
 
 # --- VERİ İNDİRME VE İŞLEME (Bulut Uyumlu) ---
 @st.cache_data
@@ -79,8 +87,8 @@ if not df.empty:
             require_sum_stats = st.checkbox("Only show studies with Full Summary Statistics", value=False)
             
             submitted = st.form_submit_button("🚀 Apply & Visualize")
-            
-        # 🛠️ GİZLİ HAFIZA TETİKLEYİCİSİ: Butona basıldığında durumu hafızaya kaydet
+        
+        # Form tıklandığında durumu session_state hafızasına alarak sıfırlanmayı engelliyoruz
         if submitted:
             st.session_state["form_submitted"] = True
         
@@ -88,7 +96,6 @@ if not df.empty:
     with col2:
         st.subheader("📊 Results & Analytics")
         
-        # 🛠️ KRİTİK DEĞİŞİKLİK: Sadece 'submitted' kontrolü değil, hafıza durumunu kontrol et
         if st.session_state.get("form_submitted", False):
             # 1. Filtreleri Uygula
             res = df.copy()
@@ -97,7 +104,7 @@ if not df.empty:
                 res = res[res[trait_col].astype(str) == selected_trait]
                 
             if selected_ancestries:
-                pattern = '|'.join([anc.lower() for anc in selected_ancestries])
+                pattern = '|'.join([anc.lower() for geom in selected_ancestries for anc in [geom]])
                 res = res[res[sample_col].astype(str).str.contains(pattern, case=False, na=False)]
                 
             if searched_ancestry:
@@ -139,13 +146,13 @@ if not df.empty:
                                        markers=True, line_shape="spline")
                     st.plotly_chart(fig_line, use_container_width=True)
 
-                # 3. İnteraktif Tablo, Seçim ve İndirme
+                # 3. İnteraktif Tablo ve Seçim Köprüsü
                 st.write(f"**Total Studies Found:** {len(res)}")
                 st.info("💡 Showing first 100 rows for preview. **Select exactly TWO studies** from the table to unlock cross-population analysis.")
                 
                 display_df = res.drop(columns=['Extract_Year', 'N_Size']).head(100)
                 
-                # --- SİHİRLİ SEÇİM TABLOSU ---
+                # İnteraktif Seçim Tablosu
                 selection = st.dataframe(
                     display_df, 
                     use_container_width=True,
@@ -156,7 +163,8 @@ if not df.empty:
                 selected_rows = selection.get("selection", {}).get("rows", [])
 
                 if len(selected_rows) == 2:
-                    id_col = [col for col in display_df.columns if 'ACCESSION' in col.upper()][0]
+                    # PubMed hatasını önlemek için doğrudan STUDY ACCESSION sütununu hedefliyoruz
+                    id_col = 'STUDY ACCESSION'
                     
                     study_1_raw = str(display_df.iloc[selected_rows[0]][id_col])
                     study_2_raw = str(display_df.iloc[selected_rows[1]][id_col])
@@ -164,12 +172,37 @@ if not df.empty:
                     study_1_id = f"ebi-a-{study_1_raw}" if study_1_raw.startswith("GCST") else study_1_raw
                     study_2_id = f"ebi-a-{study_2_raw}" if study_2_raw.startswith("GCST") else study_2_raw
                     
-                    st.success(f"Selected Studies for Analysis: **{study_1_id}** and **{study_2_id}**")
+                    st.success(f"Selected Studies: **{study_1_id}** and **{study_2_id}**")
                     
+                    # --- AKILLI OPEN_GWAS KONTROLÜ (VALIDATION) ---
                     if st.button("🚀 Go Further Analysis & Compare", type="primary"):
-                        st.session_state["auto_study_1"] = study_1_id
-                        st.session_state["auto_study_2"] = study_2_id
-                        st.switch_page("pages/2_⚖️_Compare_GWAS.py")
+                        with st.spinner("Verifying availability in OpenGWAS database..."):
+                            try:
+                                # OpenGWAS info ucuna iki ID'yi de soruyoruz
+                                check_url = "https://api.opengwas.io/api/gwasinfo"
+                                headers = {"Authorization": f"Bearer {api_token}", "Accept": "application/json"}
+                                check_res = requests.post(check_url, json={"id": [study_1_id, study_2_id]}, headers=headers)
+                                
+                                if check_res.status_code == 200:
+                                    available_studies = [item['id'] for item in check_res.json()]
+                                    
+                                    # İki ID de veritabanında var mı kontrolü
+                                    missing = []
+                                    if study_1_id not in available_studies: missing.append(study_1_id)
+                                    if study_2_id not in available_studies: missing.append(study_2_id)
+                                    
+                                    if not missing:
+                                        # İkisi de varsa pürüzsüz geçiş yapıyoruz
+                                        st.session_state["auto_study_1"] = study_1_id
+                                        st.session_state["auto_study_2"] = study_2_id
+                                        st.switch_page("pages/2_⚖️_Compare_GWAS.py")
+                                    else:
+                                        # Eksik olanı kullanıcıya İngilizce olarak kibarca bildiriyoruz
+                                        st.error(f"⚠️ Unable to proceed. The following study/studies are not indexed or fully processed in OpenGWAS yet: {', '.join(missing)}. Please select different studies.")
+                                else:
+                                    st.error("⚠️ OpenGWAS server responded with an error. Please try again later.")
+                            except Exception as e:
+                                st.error(f"⚠️ Connection error during verification: {e}")
                         
                 elif len(selected_rows) > 2:
                     st.warning("⚠️ Please select exactly 2 studies for comparison.")
