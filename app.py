@@ -154,7 +154,7 @@ if not df.empty:
                     st.markdown("##### 📍 Geographic Distribution of Study Cohorts (Regional & Country Level)")
                     st.caption("Mapped using unique study-level points with jittering. Highlighted regions represent broad ancestry fallback centroids (e.g., European -> Central Europe). Bubble sizes are scaled relative to Sample Size (N).")
                     
-                    # GEOGRAPHIC COORDINATE DICTIONARY (Exact Countries & Continental Fallbacks)
+                    # GEOGRAPHIC COORDINATE DICTIONARY
                     geo_mapping = {
                         'UK': {'lat': 55.3781, 'lon': -3.4360, 'name': 'United Kingdom'},
                         'United Kingdom': {'lat': 55.3781, 'lon': -3.4360, 'name': 'United Kingdom'},
@@ -199,7 +199,6 @@ if not df.empty:
 
                         # 3. Apply jittering and append if coordinates found
                         if lat is not None:
-                            # 1.5 degrees of jitter spreads points apart enough to see clusters
                             jitter_amount = 1.5 
                             lat_jittered = lat + np.random.uniform(-jitter_amount, jitter_amount)
                             lon_jittered = lon + np.random.uniform(-jitter_amount, jitter_amount)
@@ -218,9 +217,9 @@ if not df.empty:
                     map_data = pd.DataFrame(map_rows_jittered)
 
                     if not map_data.empty:
-                        # Log/Sqrt scaling to make low N studies visible without giant N dominating
-                        # Plotly'nin sıfır boyutlu baloncuk çizip çökmesini önlemek için minimum değeri 1'e sabitliyoruz
-                        map_data['size_normalized'] = np.sqrt(map_data['N_Size'].clip(lower=1))
+                        # 🛠️ THE FIX: clip(lower=1) prevents Plotly from crashing on 0-size samples
+                        map_data['size_normalized'] = np.sqrt(map_data['N_Size'].clip(lower=1)) 
+
                         # Draw Scatter Geo Bubble Visual with individual study points
                         fig_map = px.scatter_geo(
                             map_data,
@@ -238,7 +237,7 @@ if not df.empty:
                                 'Year': True,
                                 'STUDY ACCESSION': True
                             },
-                            size_max=15, # Keeps bubbles from overlapping the entire continent
+                            size_max=15, 
                             projection="natural earth",
                             color="N_Size",
                             color_continuous_scale=px.colors.sequential.Plasma,
