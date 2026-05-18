@@ -151,9 +151,9 @@ if not df.empty:
 
                 with tab_map:
                     st.markdown("##### 📍 Geographic Distribution of Study Cohorts (Regional & Country Level)")
-                    st.caption("Mapped using precise country coordinates where available, with regional fallbacks for broad ancestries (e.g., European -> Central Europe). Bubble sizes represent Sample Size (N).")
+                    st.caption("Mapped using precise country coordinates where available, with regional fallbacks for broad ancestries (e.g., European -> Central Europe). Bubble sizes and colors represent Sample Size (N).")
                     
-                    # GEOGRAPHIC COORDINATE REGEX DICTIONARY (Specific Countries & Continental Fallbacks)
+                    # 📍 GEOGRAPHIC COORDINATE REGEX DICTIONARY (Specific Countries & Continental Fallbacks)
                     geo_mapping = {
                         # Exact Country Pinpoints
                         'UK': {'lat': 55.3781, 'lon': -3.4360, 'name': 'United Kingdom'},
@@ -179,12 +179,16 @@ if not df.empty:
                     for idx, row in res.iterrows():
                         sample_text = str(row[sample_col])
                         n_size = row['N_Size']
+                        trait = row[trait_col]
+                        author = row[author_col]
+                        year = row['Extract_Year']
+                        accession = row['STUDY ACCESSION']
                         
                         found_specific = False
                         # 1. Step: Primary search for country level pinpoints
                         for key, geo in geo_mapping.items():
                             if key in sample_text and key not in ['European', 'East Asian', 'African', 'South Asian', 'Latino', 'Hispanic']:
-                                map_rows.append({'Region': geo['name'], 'Latitude': geo['lat'], 'Longitude': geo['lon'], 'N_Size': n_size})
+                                map_rows.append({'Region': geo['name'], 'Latitude': geo['lat'], 'Longitude': geo['lon'], 'N_Size': n_size, 'Trait': trait, 'Author': author, 'Year': year, 'STUDY ACCESSION': accession})
                                 found_specific = True
                                 break
                         
@@ -192,26 +196,27 @@ if not df.empty:
                         if not found_specific:
                             for key, geo in geo_mapping.items():
                                 if key in sample_text:
-                                    map_rows.append({'Region': geo['name'], 'Latitude': geo['lat'], 'Longitude': geo['lon'], 'N_Size': n_size})
+                                    map_rows.append({'Region': geo['name'], 'Latitude': geo['lat'], 'Longitude': geo['lon'], 'N_Size': n_size, 'Trait': trait, 'Author': author, 'Year': year, 'STUDY ACCESSION': accession})
                                     break
 
                     if map_rows:
                         map_df = pd.DataFrame(map_rows)
-                        # Aggregate sample sizes belonging to same coordinates
-                        map_data = map_df.groupby(['Region', 'Latitude', 'Longitude'])['N_Size'].sum().reset_index()
+                        # Aggregation mantığını sildik, doğrudan bireysel çalışmaları kullanıyoruz
 
-                        # Draw Scatter Geo Bubble Visual
+                        # 🌐 Bireysel Çalışmaları Ayrı Ayrı Haritaya Çiziyoruz
                         fig_map = px.scatter_geo(
-                            map_data,
+                            map_df, # Gruplanmamış orijinal veri çerçevesini kullanıyoruz
                             lat="Latitude",
                             lon="Longitude",
                             size="N_Size",
                             hover_name="Region",
-                            size_max=35,
+                            hover_data=['N_Size', 'Trait', 'Author', 'Year', 'STUDY ACCESSION'], # Üzerine gelince detaylı bilgi ekle
+                            size_max=35, # Boyut aralığını daha iyi yönetmek için size_max'ı ayarlayabiliriz
                             projection="natural earth",
-                            color="N_Size",
+                            color="N_Size", # Örneklem boyutuna göre renk kodlaması
                             color_continuous_scale=px.colors.sequential.Plasma,
-                            template="plotly_white"
+                            template="plotly_white",
+                            opacity=0.6 # Çakışmaları daha iyi görmek için opaklığı düşür
                         )
                         fig_map.update_layout(margin={"r":0,"t":40,"l":0,"b":0}, geo=dict(showland=True, landcolor="#F4F4F4"))
                         st.plotly_chart(fig_map, use_container_width=True)
