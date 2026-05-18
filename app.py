@@ -5,6 +5,7 @@ import urllib.request
 import os
 import re
 import requests
+import numpy as np # Koordinat varyasyonu için gerekli
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="GWAS Catalog Explorer", layout="wide", page_icon="🧬")
@@ -149,11 +150,11 @@ if not df.empty:
                                            markers=True, line_shape="spline")
                         st.plotly_chart(fig_line, use_container_width=True)
 
-                with tab_map:
+               with tab_map:
                     st.markdown("##### 📍 Geographic Distribution of Study Cohorts (Regional & Country Level)")
-                    st.caption("Mapped using precise country coordinates where available, with regional fallbacks for broad ancestries (e.g., European -> Central Europe). Bubble sizes and colors represent Sample Size (N).")
+                    st.caption("Mapped using unique study-level points with jittering. Highlighted regions represent broad ancestry fallback centroids (e.g., European -> Central Europe). Bubble sizes are log-scaled represent Sample Size (N).")
                     
-                    # 📍 GEOGRAPHIC COORDINATE REGEX DICTIONARY (Specific Countries & Continental Fallbacks)
+                    # 📍 GEOGRAPHIC COORDINATE DICTIONARY (Exact Countries & Continental Fallbacks)
                     geo_mapping = {
                         # Exact Country Pinpoints
                         'UK': {'lat': 55.3781, 'lon': -3.4360, 'name': 'United Kingdom'},
@@ -175,54 +176,60 @@ if not df.empty:
                         'Hispanic': {'lat': -14.6048, 'lon': -57.6562, 'name': 'Latin America (Broad Ancestry)'}
                     }
 
-                    map_rows = []
+                    # --- KRİTİK DEĞİŞİKLİK: GRUPLAMAYI KALDIRIYORUZ VE JITTERING EKLİYORUZ ---
+                    # map_rows_jittered adında yeni bir liste oluşturup bireysel çalışmaları atacağız
+                    map_rows_jittered = []
                     for idx, row in res.iterrows():
                         sample_text = str(row[sample_col])
                         n_size = row['N_Size']
-                        trait = row[trait_col]
-                        author = row[author_col]
-                        year = row['Extract_Year']
-                        accession = row['STUDY ACCESSION']
                         
                         found_specific = False
-                        # 1. Step: Primary search for country level pinpoints
+                        # Önce geo_mapping mantığına göre koordinatları ve bölgeyi bul
                         for key, geo in geo_mapping.items():
                             if key in sample_text and key not in ['European', 'East Asian', 'African', 'South Asian', 'Latino', 'Hispanic']:
-                                map_rows.append({'Region': geo['name'], 'Latitude': geo['lat'], 'Longitude': geo['lon'], 'N_Size': n_size, 'Trait': trait, 'Author': author, 'Year': year, 'STUDY ACCESSION': accession})
+                                lat, lon, region = geo['lat'], geo['lon'], geo['name']
                                 found_specific = True
                                 break
-                        
-                        # 2. Step: Secondary fallback search for broad regional continents
                         if not found_specific:
                             for key, geo in geo_mapping.items():
                                 if key in sample_text:
-                                    map_rows.append({'Region': geo['name'], 'Latitude': geo['lat'], 'Longitude': geo['lon'], 'N_Size': n_size, 'Trait': trait, 'Author': author, 'Year': year, 'STUDY ACCESSION': accession})
+                                    lat, lon, region = geo['lat'], geo['lon'], geo['name']
                                     break
+                        
+                        # Hafif bir jittering uygula (örneğin 0.05 derecelik rastgele kayma)
+                        jitter_amount = 0.05
+                        lat_jittered = lat + np.random.uniform(-jitter_amount, jitter_amount)
+                        lon_jittered = lon + np.random.uniform(-jitter_amount, jitter_amount)
+                        
+                        map_rows_jittered.append({'Region': region, 'Latitude': lat_jittered, 'Longitude': lon_jittered, 'N_Size': n_size})
 
-                    if map_rows:
-                        map_df = pd.DataFrame(map_rows)
-                        # Aggregation mantığını sildik, doğrudan bireysel çalışmaları kullanıyoruz
+                    map_data = pd.DataFrame(map_rows_jittered)
 
-                        # 🌐 Bireysel Çalışmaları Ayrı Ayrı Haritaya Çiziyoruz
+                    if not map_data.empty:
+                        # Logaritmik veya karekök ölçeklendirme kullanarak düşük N çalışmalarını görünür kıl
+                        # st.number_input yerine kodun içinde yapmak daha adil
+                        map_data['size_normalized'] = np.sqrt(map_data['N_Size']) # Karekök ölçeklendirme
+                        # Alternatif log: map_data['size_normalized'] = np.log1p(map_data['N_Size'])
+
+                        # 🌐 Kabarcık Haritasını (Scatter Geo) Bireysel Çalışmalarla Çiziyoruz
                         fig_map = px.scatter_geo(
-                            map_df, # Gruplanmamış orijinal veri çerçevesini kullanıyoruz
+                            map_data, # Gruplanmamış veri çerçevesini kullan
                             lat="Latitude",
                             lon="Longitude",
-                            size="N_Size",
+                            size="size_normalized", # Normalleştirilmiş boyutu kullan
                             hover_name="Region",
-                            hover_data=['N_Size', 'Trait', 'Author', 'Year', 'STUDY ACCESSION'], # Üzerine gelince detaylı bilgi ekle
-                            size_max=35, # Boyut aralığını daha iyi yönetmek için size_max'ı ayarlayabiliriz
+                            hover_data={'N_Size': ':,'}, # Fare üzerine gelince gerçek N_Size'ı göster
+                            size_max=15, # Maksimum boyutu önemli ölçüde azalt (örneğin 15-20)
                             projection="natural earth",
                             color="N_Size", # Örneklem boyutuna göre renk kodlaması
                             color_continuous_scale=px.colors.sequential.Plasma,
                             template="plotly_white",
-                            opacity=0.6 # Çakışmaları daha iyi görmek için opaklığı düşür
+                            opacity=0.6 # Çakışmaları daha iyi görmek için opaklığı artır
                         )
                         fig_map.update_layout(margin={"r":0,"t":40,"l":0,"b":0}, geo=dict(showland=True, landcolor="#F4F4F4"))
                         st.plotly_chart(fig_map, use_container_width=True)
-                    else:
-                        st.info("🗺️ No geographic or ancestry-based location data could be extracted for this trait.")
-
+                    else:st.info("🗺️ No geographic or ancestry-based location data could be extracted for this trait.")
+                        
                 # 3. INTERACTIVE DATAFRAME & INTEGRATED PORTAL BRIDGE
                 st.markdown("---")
                 st.write(f"**Total Studies Found:** {len(res)}")
