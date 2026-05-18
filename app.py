@@ -219,8 +219,8 @@ if not df.empty:
 
                     if not map_data.empty:
                         # Log/Sqrt scaling to make low N studies visible without giant N dominating
-                        map_data['size_normalized'] = np.sqrt(map_data['N_Size']) 
-
+                        # Plotly'nin sıfır boyutlu baloncuk çizip çökmesini önlemek için minimum değeri 1'e sabitliyoruz
+                        map_data['size_normalized'] = np.sqrt(map_data['N_Size'].clip(lower=1))
                         # Draw Scatter Geo Bubble Visual with individual study points
                         fig_map = px.scatter_geo(
                             map_data,
