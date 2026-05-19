@@ -74,6 +74,9 @@ if not df.empty:
             selected_ancestries = st.multiselect("Ancestry Quick-Select", major_ancestries)
             searched_ancestry = st.text_input("Manual Ancestry Search", placeholder="e.g., Finnish, Pima Indian")
             
+            # --- YENİ ÖZELLİK: STRICT ANCESTRY FILTER ---
+            strict_ancestry = st.checkbox("Strict Ancestry (Exclude mixed/multi-ancestry cohorts)", value=False)
+            
             st.markdown("### Publication Year")
             min_year_data = int(df['Extract_Year'].min()) if pd.notnull(df['Extract_Year'].min()) else 2000
             max_year_data = int(df['Extract_Year'].max()) if pd.notnull(df['Extract_Year'].max()) else 2026
@@ -81,6 +84,10 @@ if not df.empty:
             
             st.markdown("### Data Availability")
             require_sum_stats = st.checkbox("Only show studies with Full Summary Statistics", value=False)
+            
+            # --- YENİ ÖZELLİK: SORTING ENGINE ---
+            st.markdown("### Sorting & Order")
+            sort_by = st.selectbox("Sort Results By:", ["Sample Size (High to Low)", "Publication Year (Newest)", "First Author (A-Z)"])
             
             submitted = st.form_submit_button("🚀 Apply & Visualize")
         
@@ -98,11 +105,23 @@ if not df.empty:
                 res = res[res[trait_col].astype(str) == selected_trait]
                 
             if selected_ancestries:
-                pattern = '|'.join([anc.lower() for geom in selected_ancestries for anc in [geom]])
+                pattern = '|'.join([anc.lower() for anc in selected_ancestries])
                 res = res[res[sample_col].astype(str).str.contains(pattern, case=False, na=False)]
                 
             if searched_ancestry:
                 res = res[res[sample_col].astype(str).str.contains(searched_ancestry, case=False, na=False)]
+                
+            # --- UYGULANAN STRICT ANCESTRY MANTIĞI ---
+            if strict_ancestry:
+                # 1. Doğrudan "mixed" veya "admixed" geçenleri ele
+                res = res[~res[sample_col].astype(str).str.contains('admixed|mixed|cross-population', case=False, na=False)]
+                
+                # 2. Eğer spesifik bir popülasyon seçildiyse, seçilmeyen BÜTÜN diğer ana popülasyonları ele (Tam İzolasyon)
+                if selected_ancestries:
+                    exclude_list = [a for a in major_ancestries if a not in selected_ancestries]
+                    if exclude_list:
+                        pattern_exclude = '|'.join([anc.lower() for anc in exclude_list])
+                        res = res[~res[sample_col].astype(str).str.contains(pattern_exclude, case=False, na=False)]
                 
             res = res[res['Extract_Year'] >= selected_year]
             
@@ -110,6 +129,14 @@ if not df.empty:
                 sum_stats_col = 'FULL SUMMARY STATISTICS'
                 if sum_stats_col in res.columns:
                     res = res[res[sum_stats_col].astype(str).str.lower().str.contains('yes', na=False)]
+                    
+            # --- UYGULANAN SORTING (SIRALAMA) MANTIĞI ---
+            if sort_by == "Sample Size (High to Low)":
+                res = res.sort_values(by='N_Size', ascending=False)
+            elif sort_by == "Publication Year (Newest)":
+                res = res.sort_values(by='Extract_Year', ascending=False)
+            elif sort_by == "First Author (A-Z)":
+                res = res.sort_values(by=author_col, ascending=True)
             
             if not res.empty:
                 tab_charts, tab_map = st.tabs(["📈 Statistical Charts", "🌍 Global Distribution Map"])
@@ -145,7 +172,6 @@ if not df.empty:
                     st.markdown("##### 📍 Geographic Distribution of Study Cohorts (Global Coverage)")
                     st.caption("Dinamically resolved locations using advanced text mining on ethnic descriptions. Bubble sizes are scaled relative to Sample Size (N).")
                     
-                    # 🌐 EVRENSEL ETNİSİTE VE COĞRAFYA SÖZLÜĞÜ (INITIAL SAMPLE SIZE İçin)
                     global_geo_db = {
                         # Europe & Baltics
                         'UK': {'lat': 55.3781, 'lon': -3.4360, 'lbl': 'United Kingdom'},
@@ -205,13 +231,11 @@ if not df.empty:
                         
                         lat, lon, resolved_name = None, None, None
                         
-                        # Kelime köklerini akıllıca arayan RegEx motoru
                         for key, coord in global_geo_db.items():
                             if re.search(r'\b' + re.escape(key) + r'\b', sample_text, re.IGNORECASE):
                                 lat, lon, resolved_name = coord['lat'], coord['lon'], coord['lbl']
-                                break # İlk eşleşen en spesifik olanı al (Sözlük sırasına göre)
+                                break 
 
-                        # Koordinat bulunduysa jittering ekle ve listeye at
                         if lat is not None:
                             jitter_amount = 1.8 
                             lat_jittered = lat + np.random.uniform(-jitter_amount, jitter_amount)
@@ -261,7 +285,6 @@ if not df.empty:
                     else:
                         st.info("🗺️ No geographic or ancestry-based location data could be extracted for this trait.")
 
-                # 3. INTERACTIVE DATAFRAME & INTEGRATED PORTAL BRIDGE
                 st.markdown("---")
                 st.write(f"**Total Studies Found:** {len(res)}")
                 st.info("💡 Showing first 100 rows for preview. **Select exactly TWO studies** from the table to unlock cross-population analysis.")
@@ -311,7 +334,6 @@ if not df.empty:
                                 else:
                                     st.error("⚠️ OpenGWAS server responded with an error. Please try again later.")
                             except Exception as e:
-                                r_beta = 0 # Dummy to satisfy any inner bindings if necessary
                                 st.error(f"⚠️ Connection error during verification: {e}")
                         
                 elif len(selected_rows) > 2:
