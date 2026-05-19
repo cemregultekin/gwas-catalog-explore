@@ -33,65 +33,30 @@ if "id2_input" not in st.session_state:
 col1, col2, col3 = st.columns(3)
 with col1:
     id1 = st.text_input("Study 1 ID (Base Model)", key="id1_input")
-    st.caption("Base Study (Top Hits will be extracted from here)")
+    st.caption("Base Study (Pre-computed Top Hits will be extracted from here)")
 with col2:
     id2 = st.text_input("Study 2 ID (Target Model)", key="id2_input")
-    st.caption("Target Study (Full Summary Stats required)")
+    st.caption("Target Study (Full Summary Stats required for overlap lookup)")
 with col3:
     snp_limit = st.number_input("Max SNPs to Compare", min_value=50, max_value=1000, value=500, step=50)
-
-# --- VARIANT EXTRACTION STRATEGY SELECTION ---
-st.markdown("### 🛠️ Variant Selection Strategy")
-strategy = st.radio(
-    "Choose how variants should be extracted from Study 1:",
-    options=["Strict p-Value Thresholding (Scans full catalog by p-value threshold)", 
-             "Pre-computed Top Hits (Fetches genome-wide significant lead SNPs only)"],
-    index=0
-)
-
-# Dynamic threshold slider based on selection
-if "Strict p-Value" in strategy:
-    p_threshold = st.select_slider(
-        "Select p-Value Threshold for Filtering Study 1:",
-        options=[1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 5e-8, 1e-8],
-        value=1e-5,
-        format_func=lambda x: f"{x:.2e}"
-    )
-    st.caption("💡 Tip: Relaxing the threshold to 1e-5 or 1e-4 increases overlapping variant counts between diverse populations.")
 
 if st.button("🚀 Run Harmonization & Comparison", type="primary"):
     base_url = "https://api.opengwas.io/api"
     headers = {"Authorization": f"Bearer {api_token}", "Accept": "application/json"}
 
     with st.status("Running Bioinformatics Pipeline...", expanded=True) as status:
-        
-        # --- STRATEGY 1: P-VALUE THRESHOLDING VIA PHEWAS ENDPOINT ---
-        if "Strict p-Value" in strategy:
-            st.write(f"1️⃣ Scanning Study {id1} via PheWAS query (p-value < {p_threshold:.2e})...")
-            # PheWAS endpoint accepts a variant-free payload filtered tightly by p-value across a specific study
-            phewas_url = f"{base_url}/phewas"
-            payload = {"variant": id1, "pval": p_threshold}
-            res1 = requests.post(phewas_url, json=payload, headers=headers)
-            
-        # --- STRATEGY 2: PRE-COMPUTED LEAD SNPS ---
-        else:
-            st.write(f"1️⃣ Fetching pre-computed genome-wide significant Top Hits from {id1}...")
-            tophits_url = f"{base_url}/tophits"
-            res1 = requests.post(tophits_url, json={"id": [id1]}, headers=headers)
+        st.write(f"1️⃣ Fetching pre-computed Top Hits from {id1}...")
+        res1 = requests.post(f"{base_url}/tophits", json={"id": [id1]}, headers=headers)
         
         if res1.status_code == 200 and res1.json():
             df1 = pd.DataFrame(res1.json())
             if not df1.empty:
-                # Standardize variant identity key for the dataframe (PheWAS returns 'rsid' as well)
-                if 'rsid' not in df1.columns and 'id' in df1.columns:
-                    df1 = df1.rename(columns={'id': 'rsid'})
-                
-                # Sort values strictly to isolate the absolute top signals up to user limit
+                # Sort by p-value and isolate to user defined limit
                 df1 = df1.sort_values('p').head(snp_limit)
                 snp_list = df1['rsid'].dropna().unique().tolist()
-                st.write(f"✅ Isolated {len(snp_list)} top candidate SNPs from Study 1. Querying targets in Study 2...")
+                st.write(f"✅ Isolated {len(snp_list)} significant lead SNPs. Querying targets in {id2}...")
                 
-                # Split rsIDs into chunks to prevent payload overflows
+                # Split rsIDs into chunks of 60 to protect payload limits
                 chunks = [snp_list[i:i + 60] for i in range(0, len(snp_list), 60)]
                 df2_list = []
                 
@@ -105,12 +70,12 @@ if st.button("🚀 Run Harmonization & Comparison", type="primary"):
                     
                 if df2_list:
                     df2 = pd.concat(df2_list, ignore_index=True)
-                    st.write(f"✅ Retrieved {len(df2)} matches from Study 2. Starting Dual-Harmonization (Strand flip checks)...")
+                    st.write(f"✅ Retrieved {len(df2)} matches from Study 2. Aligning strands...")
                     
+                    # Standardize column mappings across both dataframes
                     df1 = df1.rename(columns={'beta': 'b', 'effect_allele': 'ea', 'other_allele': 'nea'})
                     df2 = df2.rename(columns={'beta': 'b', 'effect_allele': 'ea', 'other_allele': 'nea'})
                     
-                    # Ensure columns exist before merging
                     cols_to_keep = ['rsid', 'ea', 'nea', 'b', 'p', 'eaf']
                     df1_filtered = df1[[c for c in cols_to_keep if c in df1.columns]]
                     df2_filtered = df2[[c for c in cols_to_keep if c in df2.columns]]
@@ -134,43 +99,47 @@ if st.button("🚀 Run Harmonization & Comparison", type="primary"):
                         merged[['harmonized_b_S2', 'harmonized_eaf_S2']] = merged.apply(harmonize_all, axis=1)
                         merged = merged.dropna(subset=['harmonized_b_S2'])
                         
-                        status.update(label=f"Analysis Complete! {len(merged)} SNPs successfully harmonized.", state="complete", expanded=False)
-                        
-                        # --- STATS AND PLOTLY CORRELATION CHARTS ---
-                        r_beta, p_beta = pearsonr(merged['b_S1'], merged['harmonized_b_S2'])
-                        r_eaf, p_eaf = pearsonr(merged['eaf_S1'], merged['harmonized_eaf_S2'])
+                        if not merged.empty:
+                            status.update(label=f"Analysis Complete! {len(merged)} SNPs successfully harmonized.", state="complete", expanded=False)
+                            
+                            # --- CALCULATE STATISTICS AND RENDER CORRELATION PLOTS ---
+                            r_beta, p_beta = pearsonr(merged['b_S1'], merged['harmonized_b_S2'])
+                            r_eaf, p_eaf = pearsonr(merged['eaf_S1'], merged['harmonized_eaf_S2'])
 
-                        fig = make_subplots(rows=1, cols=2, subplot_titles=(
-                            f"<b>Beta Correlation</b><br><span style='font-size:12px;color:gray'>r = {r_beta:.3f} | p = {p_beta:.2e}</span>", 
-                            f"<b>Allele Frequency (EAF)</b><br><span style='font-size:12px;color:gray'>r = {r_eaf:.3f} | p = {p_eaf:.2e}</span>"
-                        ))
+                            fig = make_subplots(rows=1, cols=2, subplot_titles=(
+                                f"<b>Beta Correlation</b><br><span style='font-size:12px;color:gray'>r = {r_beta:.3f} | p = {p_beta:.2e}</span>", 
+                                f"<b>Allele Frequency (EAF)</b><br><span style='font-size:12px;color:gray'>r = {r_eaf:.3f} | p = {p_eaf:.2e}</span>"
+                            ))
 
-                        fig.add_trace(go.Scatter(x=merged['b_S1'], y=merged['harmonized_b_S2'], mode='markers', text=merged['rsid'], marker=dict(color='#636EFA', opacity=0.7), name='Beta'), row=1, col=1)
-                        fig.add_trace(go.Scatter(x=merged['eaf_S1'], y=merged['harmonized_eaf_S2'], mode='markers', text=merged['rsid'], marker=dict(color='#EF553B', opacity=0.7), name='EAF'), row=1, col=2)
+                            fig.add_trace(go.Scatter(x=merged['b_S1'], y=merged['harmonized_b_S2'], mode='markers', text=merged['rsid'], marker=dict(color='#636EFA', opacity=0.7), name='Beta'), row=1, col=1)
+                            fig.add_trace(go.Scatter(x=merged['eaf_S1'], y=merged['harmonized_eaf_S2'], mode='markers', text=merged['rsid'], marker=dict(color='#EF553B', opacity=0.7), name='EAF'), row=1, col=2)
 
-                        b_min, b_max = min(merged['b_S1'].min(), merged['harmonized_b_S2'].min()), max(merged['b_S1'].max(), merged['harmonized_b_S2'].max())
-                        fig.add_shape(type="line", x0=b_min, y0=b_min, x1=b_max, y1=b_max, line=dict(color="black", dash="dash"), row=1, col=1)
-                        fig.add_shape(type="line", x0=0, y0=0, x1=1, y1=1, line=dict(color="black", dash="dash"), row=1, col=2)
+                            b_min, b_max = min(merged['b_S1'].min(), merged['harmonized_b_S2'].min()), max(merged['b_S1'].max(), merged['harmonized_b_S2'].max())
+                            fig.add_shape(type="line", x0=b_min, y0=b_min, x1=b_max, y1=b_max, line=dict(color="black", dash="dash"), row=1, col=1)
+                            fig.add_shape(type="line", x0=0, y0=0, x1=1, y1=1, line=dict(color="black", dash="dash"), row=1, col=2)
 
-                        fig.update_layout(height=500, showlegend=False, template="plotly_white")
-                        fig.update_xaxes(title_text="Study 1 Beta", row=1, col=1)
-                        fig.update_yaxes(title_text="Study 2 Beta (Harmonized)", row=1, col=1)
-                        fig.update_xaxes(title_text="Study 1 EAF", row=1, col=2)
-                        fig.update_yaxes(title_text="Study 2 EAF (Harmonized)", row=1, col=2)
+                            fig.update_layout(height=500, showlegend=False, template="plotly_white")
+                            fig.update_xaxes(title_text="Study 1 Beta", row=1, col=1)
+                            fig.update_yaxes(title_text="Study 2 Beta (Harmonized)", row=1, col=1)
+                            fig.update_xaxes(title_text="Study 1 EAF", row=1, col=2)
+                            fig.update_yaxes(title_text="Study 2 EAF (Harmonized)", row=1, col=2)
 
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-                        st.subheader("Harmonized Dataset")
-                        st.dataframe(merged[['rsid', 'ea_S1', 'nea_S1', 'b_S1', 'harmonized_b_S2', 'eaf_S1', 'harmonized_eaf_S2', 'p_S1']], use_container_width=True)
+                            st.plotly_chart(fig, use_container_width=True)
+                            
+                            st.subheader("Harmonized Dataset")
+                            st.dataframe(merged[['rsid', 'ea_S1', 'nea_S1', 'b_S1', 'harmonized_b_S2', 'eaf_S1', 'harmonized_eaf_S2', 'p_S1']], use_container_width=True)
+                        else:
+                            status.update(label="Strand flip mismatch.", state="error")
+                            st.error("Overlapping SNPs were found, but they could not be reconciled due to incompatible strand/allele configurations.")
                     else:
                         status.update(label="No overlapping variants.", state="error")
-                        st.error("The selected variants from Study 1 do not overlap with Study 2's dataset.")
+                        st.error("The selected lead variants from Study 1 do not overlap with Study 2's summary statistics panel.")
                 else:
                     status.update(label="No matches found.", state="error")
                     st.error("No overlapping SNPs found in Study 2. It might not contain full summary statistics.")
             else:
                 status.update(label="No significant SNPs.", state="error")
-                st.error("Study 1 returned an empty dataframe for the selected criteria.")
+                st.error("Study 1 returned an empty dataframe. No genome-wide significant top hits found.")
         else:
             status.update(label="API Error", state="error")
-            st.error("Failed to fetch data from Study 1. Check ID, Strategy constraints, or Token validity.")
+            st.error("Failed to fetch Top Hits from Study 1. Check ID or Token validity.")
