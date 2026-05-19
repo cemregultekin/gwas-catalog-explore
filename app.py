@@ -23,24 +23,19 @@ except Exception:
 # --- DATA DOWNLOAD AND PROCESSING (Cloud Compatible) ---
 @st.cache_data
 def load_data():
-    # Live comprehensive EBI GWAS Catalog endpoint
     url = "https://www.ebi.ac.uk/gwas/api/search/downloads/studies/v1.0.2.1"
     local_file = "gwas_data.tsv"
     
-    # Downloads file from EBI servers if it does not exist locally
     if not os.path.exists(local_file):
         with st.spinner('Downloading the latest comprehensive GWAS data from EBI servers (this happens only once)...'):
             urllib.request.urlretrieve(url, local_file)
             
-    # Read the data
     df = pd.read_csv(local_file, sep='\t', low_memory=False)
     df.columns = df.columns.str.strip()
     
-    # Extract Publication Year
     date_col = [col for col in df.columns if 'date' in col.lower()][0]
     df['Extract_Year'] = pd.to_datetime(df[date_col], errors='coerce').dt.year
     
-    # Convert Initial Sample Size text description into a clean numerical value (N_Size)
     def get_n(text):
         nums = re.findall(r'[0-9]+(?:,[0-9]+)*', str(text))
         if nums:
@@ -89,7 +84,6 @@ if not df.empty:
             
             submitted = st.form_submit_button("🚀 Apply & Visualize")
         
-        # Persist submission state in Session State to prevent table data wipeouts upon row selection
         if submitted:
             st.session_state["form_submitted"] = True
         
@@ -98,7 +92,6 @@ if not df.empty:
         st.subheader("📊 Results & Analytics")
         
         if st.session_state.get("form_submitted", False):
-            # 1. Apply Filtering Logic
             res = df.copy()
             
             if selected_trait != "All":
@@ -118,9 +111,7 @@ if not df.empty:
                 if sum_stats_col in res.columns:
                     res = res[res[sum_stats_col].astype(str).str.lower().str.contains('yes', na=False)]
             
-            # 2. Render Analytics Views
             if not res.empty:
-                # Dynamic Tabbed View Layout
                 tab_charts, tab_map = st.tabs(["📈 Statistical Charts", "🌍 Global Distribution Map"])
                 
                 with tab_charts:
@@ -151,26 +142,56 @@ if not df.empty:
                         st.plotly_chart(fig_line, use_container_width=True)
 
                 with tab_map:
-                    st.markdown("##### 📍 Geographic Distribution of Study Cohorts (Regional & Country Level)")
-                    st.caption("Mapped using unique study-level points with jittering. Highlighted regions represent broad ancestry fallback centroids (e.g., European -> Central Europe). Bubble sizes are scaled relative to Sample Size (N).")
+                    st.markdown("##### 📍 Geographic Distribution of Study Cohorts (Global Coverage)")
+                    st.caption("Dinamically resolved locations using advanced text mining on ethnic descriptions. Bubble sizes are scaled relative to Sample Size (N).")
                     
-                    # GEOGRAPHIC COORDINATE DICTIONARY
-                    geo_mapping = {
-                        'UK': {'lat': 55.3781, 'lon': -3.4360, 'name': 'United Kingdom'},
-                        'United Kingdom': {'lat': 55.3781, 'lon': -3.4360, 'name': 'United Kingdom'},
-                        'US': {'lat': 37.0902, 'lon': -95.7129, 'name': 'United States'},
-                        'United States': {'lat': 37.0902, 'lon': -95.7129, 'name': 'United States'},
-                        'Japan': {'lat': 36.2048, 'lon': 138.2529, 'name': 'Japan'},
-                        'China': {'lat': 35.8617, 'lon': 104.1954, 'name': 'China'},
-                        'Finland': {'lat': 61.9241, 'lon': 25.7482, 'name': 'Finland'},
-                        'Iceland': {'lat': 64.9631, 'lon': -19.0208, 'name': 'Iceland'},
-                        'Sweden': {'lat': 60.1282, 'lon': 18.6435, 'name': 'Sweden'},
-                        'European': {'lat': 50.1109, 'lon': 8.6821, 'name': 'Europe (Broad Ancestry)'},
-                        'East Asian': {'lat': 34.0479, 'lon': 100.6197, 'name': 'East Asia (Broad Ancestry)'},
-                        'African': {'lat': 1.6508, 'lon': 22.5644, 'name': 'Africa (Broad Ancestry)'},
-                        'South Asian': {'lat': 20.5937, 'lon': 78.9629, 'name': 'South Asia (Broad Ancestry)'},
-                        'Latino': {'lat': -14.6048, 'lon': -57.6562, 'name': 'Latin America (Broad Ancestry)'},
-                        'Hispanic': {'lat': -14.6048, 'lon': -57.6562, 'name': 'Latin America (Broad Ancestry)'}
+                    # 🌐 EVRENSEL ETNİSİTE VE COĞRAFYA SÖZLÜĞÜ (INITIAL SAMPLE SIZE İçin)
+                    global_geo_db = {
+                        # Europe & Baltics
+                        'UK': {'lat': 55.3781, 'lon': -3.4360, 'lbl': 'United Kingdom'},
+                        'United Kingdom': {'lat': 55.3781, 'lon': -3.4360, 'lbl': 'United Kingdom'},
+                        'British': {'lat': 55.3781, 'lon': -3.4360, 'lbl': 'United Kingdom'},
+                        'Finland': {'lat': 61.9241, 'lon': 25.7482, 'lbl': 'Finland'},
+                        'Finnish': {'lat': 61.9241, 'lon': 25.7482, 'lbl': 'Finland'},
+                        'Estonia': {'lat': 58.5953, 'lon': 25.0136, 'lbl': 'Estonia'},
+                        'Estonian': {'lat': 58.5953, 'lon': 25.0136, 'lbl': 'Estonia'},
+                        'Iceland': {'lat': 64.9631, 'lon': -19.0208, 'lbl': 'Iceland'},
+                        'Icelandic': {'lat': 64.9631, 'lon': -19.0208, 'lbl': 'Iceland'},
+                        'Sweden': {'lat': 60.1282, 'lon': 18.6435, 'lbl': 'Sweden'},
+                        'Swedish': {'lat': 60.1282, 'lon': 18.6435, 'lbl': 'Sweden'},
+                        'Germany': {'lat': 51.1657, 'lon': 10.4515, 'lbl': 'Germany'},
+                        'German': {'lat': 51.1657, 'lon': 10.4515, 'lbl': 'Germany'},
+                        'France': {'lat': 46.2276, 'lon': 2.2137, 'lbl': 'France'},
+                        'French': {'lat': 46.2276, 'lon': 2.2137, 'lbl': 'France'},
+                        'Netherlands': {'lat': 52.1326, 'lon': 5.2913, 'lbl': 'Netherlands'},
+                        'Dutch': {'lat': 52.1326, 'lon': 5.2913, 'lbl': 'Netherlands'},
+                        
+                        # Asia & Middle East
+                        'Korea': {'lat': 35.9078, 'lon': 127.7669, 'lbl': 'Korea'},
+                        'Korean': {'lat': 35.9078, 'lon': 127.7669, 'lbl': 'Korea'},
+                        'Japan': {'lat': 36.2048, 'lon': 138.2529, 'lbl': 'Japan'},
+                        'Japanese': {'lat': 36.2048, 'lon': 138.2529, 'lbl': 'Japan'},
+                        'China': {'lat': 35.8617, 'lon': 104.1954, 'lbl': 'China'},
+                        'Chinese': {'lat': 35.8617, 'lon': 104.1954, 'lbl': 'China'},
+                        'Taiwan': {'lat': 23.6978, 'lon': 120.9605, 'lbl': 'Taiwan'},
+                        'Taiwanese': {'lat': 23.6978, 'lon': 120.9605, 'lbl': 'Taiwan'},
+                        'Middle Eastern': {'lat': 29.2985, 'lon': 42.5510, 'lbl': 'Middle East'},
+                        'Saudi': {'lat': 23.8859, 'lon': 45.0792, 'lbl': 'Saudi Arabia'},
+                        'Turkey': {'lat': 38.9637, 'lon': 35.2433, 'lbl': 'Turkey'},
+                        'Turkish': {'lat': 38.9637, 'lon': 35.2433, 'lbl': 'Turkey'},
+                        'India': {'lat': 20.5937, 'lon': 78.9629, 'lbl': 'India'},
+                        'Indian': {'lat': 20.5937, 'lon': 78.9629, 'lbl': 'India'},
+                        
+                        # Americas & broad fallbacks
+                        'United States': {'lat': 37.0902, 'lon': -95.7129, 'lbl': 'United States'},
+                        'US': {'lat': 37.0902, 'lon': -95.7129, 'lbl': 'United States'},
+                        'USA': {'lat': 37.0902, 'lon': -95.7129, 'lbl': 'United States'},
+                        'Hispanic': {'lat': -14.6048, 'lon': -57.6562, 'lbl': 'Hispanic/Latino'},
+                        'Latino': {'lat': -14.6048, 'lon': -57.6562, 'lbl': 'Hispanic/Latino'},
+                        'African': {'lat': 1.6508, 'lon': 22.5644, 'lbl': 'African (Broad)'},
+                        'East Asian': {'lat': 34.0479, 'lon': 100.6197, 'lbl': 'East Asian (Broad)'},
+                        'South Asian': {'lat': 22.0000, 'lon': 77.0000, 'lbl': 'South Asian (Broad)'},
+                        'European': {'lat': 50.1109, 'lon': 8.6821, 'lbl': 'European (Broad)'}
                     }
 
                     map_rows_jittered = []
@@ -182,29 +203,22 @@ if not df.empty:
                         year = int(row['Extract_Year']) if pd.notnull(row['Extract_Year']) else "Unknown"
                         accession = str(row.get('STUDY ACCESSION', 'Unknown'))
                         
-                        lat, lon, region = None, None, None
+                        lat, lon, resolved_name = None, None, None
                         
-                        # 1. Step: Primary search for country level pinpoints
-                        for key, geo in geo_mapping.items():
-                            if key in sample_text and key not in ['European', 'East Asian', 'African', 'South Asian', 'Latino', 'Hispanic']:
-                                lat, lon, region = geo['lat'], geo['lon'], geo['name']
-                                break
-                        
-                        # 2. Step: Secondary fallback search for broad regional continents
-                        if lat is None:
-                            for key, geo in geo_mapping.items():
-                                if key in sample_text:
-                                    lat, lon, region = geo['lat'], geo['lon'], geo['name']
-                                    break
+                        # Kelime köklerini akıllıca arayan RegEx motoru
+                        for key, coord in global_geo_db.items():
+                            if re.search(r'\b' + re.escape(key) + r'\b', sample_text, re.IGNORECASE):
+                                lat, lon, resolved_name = coord['lat'], coord['lon'], coord['lbl']
+                                break # İlk eşleşen en spesifik olanı al (Sözlük sırasına göre)
 
-                        # 3. Apply jittering and append if coordinates found
+                        # Koordinat bulunduysa jittering ekle ve listeye at
                         if lat is not None:
-                            jitter_amount = 1.5 
+                            jitter_amount = 1.8 
                             lat_jittered = lat + np.random.uniform(-jitter_amount, jitter_amount)
                             lon_jittered = lon + np.random.uniform(-jitter_amount, jitter_amount)
                             
                             map_rows_jittered.append({
-                                'Region': region, 
+                                'Region': resolved_name, 
                                 'Latitude': lat_jittered, 
                                 'Longitude': lon_jittered, 
                                 'N_Size': n_size,
@@ -217,10 +231,8 @@ if not df.empty:
                     map_data = pd.DataFrame(map_rows_jittered)
 
                     if not map_data.empty:
-                        # 🛠️ THE FIX: clip(lower=1) prevents Plotly from crashing on 0-size samples
                         map_data['size_normalized'] = np.sqrt(map_data['N_Size'].clip(lower=1)) 
 
-                        # Draw Scatter Geo Bubble Visual with individual study points
                         fig_map = px.scatter_geo(
                             map_data,
                             lat="Latitude",
@@ -237,12 +249,12 @@ if not df.empty:
                                 'Year': True,
                                 'STUDY ACCESSION': True
                             },
-                            size_max=15, 
+                            size_max=16, 
                             projection="natural earth",
                             color="N_Size",
                             color_continuous_scale=px.colors.sequential.Plasma,
                             template="plotly_white",
-                            opacity=0.7
+                            opacity=0.75
                         )
                         fig_map.update_layout(margin={"r":0,"t":40,"l":0,"b":0}, geo=dict(showland=True, landcolor="#F4F4F4"))
                         st.plotly_chart(fig_map, use_container_width=True)
@@ -256,7 +268,6 @@ if not df.empty:
                 
                 display_df = res.drop(columns=['Extract_Year', 'N_Size']).head(100)
                 
-                # Render Selection Table
                 selection = st.dataframe(
                     display_df, 
                     use_container_width=True,
@@ -272,13 +283,11 @@ if not df.empty:
                     study_1_raw = str(display_df.iloc[selected_rows[0]][id_col])
                     study_2_raw = str(display_df.iloc[selected_rows[1]][id_col])
                     
-                    # Auto format identifiers for OpenGWAS API compatibility
                     study_1_id = f"ebi-a-{study_1_raw}" if study_1_raw.startswith("GCST") else study_1_raw
                     study_2_id = f"ebi-a-{study_2_raw}" if study_2_raw.startswith("GCST") else study_2_raw
                     
                     st.success(f"Selected Studies: **{study_1_id}** and **{study_2_id}**")
                     
-                    # --- LIVE OPENGWAS DATABASE VALIDATION BRIDGE ---
                     if st.button("🚀 Go Further Analysis & Compare", type="primary"):
                         with st.spinner("Verifying availability in OpenGWAS database..."):
                             try:
@@ -294,7 +303,6 @@ if not df.empty:
                                     if study_2_id not in available_studies: missing.append(study_2_id)
                                     
                                     if not missing:
-                                        # Success: Write identifiers into session state and switch pages smoothly
                                         st.session_state["auto_study_1"] = study_1_id
                                         st.session_state["auto_study_2"] = study_2_id
                                         st.switch_page("pages/2_⚖️_Compare_GWAS.py")
@@ -303,12 +311,12 @@ if not df.empty:
                                 else:
                                     st.error("⚠️ OpenGWAS server responded with an error. Please try again later.")
                             except Exception as e:
+                                r_beta = 0 # Dummy to satisfy any inner bindings if necessary
                                 st.error(f"⚠️ Connection error during verification: {e}")
                         
                 elif len(selected_rows) > 2:
                     st.warning("⚠️ Please select exactly 2 studies for comparison.")
 
-                # Download Results Button
                 csv_data = res.drop(columns=['Extract_Year', 'N_Size']).to_csv(index=False).encode('utf-8')
                 st.download_button(
                     label="📥 Download Full Filtered Dataset (CSV)",
