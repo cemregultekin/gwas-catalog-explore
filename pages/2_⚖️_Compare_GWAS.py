@@ -13,22 +13,18 @@ st.markdown("Harmonize and compare Summary Statistics (Beta & EAF) between two d
 
 # --- API AUTHENTICATION (SECRETS) ---
 try:
-    # Automatically read the token from Streamlit's secure secrets
     api_token = st.secrets["OPENGWAS_TOKEN"]
 except Exception:
     st.error("⚠️ API configuration is missing. Please set the 'OPENGWAS_TOKEN' in Streamlit Secrets.")
     st.stop()
 
 # --- USER INPUT PANEL (SESSION STATE INTEGRATED) ---
-
-# 1. Eğer Explorer sayfasından yönlendirmeyle geldiysek, ID'leri widget hafızasına aktar ve köprüyü temizle
 if "auto_study_1" in st.session_state:
     st.session_state["id1_input"] = st.session_state["auto_study_1"]
     st.session_state["id2_input"] = st.session_state["auto_study_2"]
     del st.session_state["auto_study_1"]
     del st.session_state["auto_study_2"]
 
-# 2. Eğer sayfaya doğrudan girildiyse ve hafıza boşsa, varsayılan ID'leri ayarla
 if "id1_input" not in st.session_state:
     st.session_state["id1_input"] = "ebi-a-GCST90018739"
 if "id2_input" not in st.session_state:
@@ -36,7 +32,6 @@ if "id2_input" not in st.session_state:
 
 col1, col2, col3 = st.columns(3)
 with col1:
-    # 'value' YERİNE 'key' KULLANIYORUZ! Böylece butona basıldığında silinmez.
     id1 = st.text_input("Study 1 ID (Base Model)", key="id1_input")
     st.caption("Base Study (Top Hits will be extracted from here)")
 with col2:
@@ -45,28 +40,54 @@ with col2:
 with col3:
     snp_limit = st.number_input("Max SNPs to Compare", min_value=50, max_value=1000, value=500, step=50)
 
-# (BURADAN SONRAKI "if st.button..." ILE BASLAYAN ANALIZ KODUN AYNI KALACAK. 
-# SADECE ESKİ KODDAKİ "if 'auto_study_1' in st.session_state: del..." KISMINI SİLDİĞİNDEN EMİN OL.)
-# Clear session state to allow manual entry without getting stuck in a loop upon reload
-if "auto_study_1" in st.session_state:
-    del st.session_state["auto_study_1"]
-    del st.session_state["auto_study_2"]
+# --- NEW FEATURE: VARIANT EXTRACTION STRATEGY SELECTION ---
+st.markdown("### 🛠️ Variant Selection Strategy")
+strategy = st.radio(
+    "Choose how variants should be extracted from Study 1:",
+    options=["Strict p-Value Thresholding (Scans full catalog by p-value threshold)", 
+             "Pre-computed Top Hits (Fetches genome-wide significant lead SNPs only)"],
+    index=0
+)
+
+# Dynamic threshold slider based on selection
+if "Strict p-Value" in strategy:
+    p_threshold = st.select_slider(
+        "Select p-Value Threshold for Filtering Study 1:",
+        options=[1e-3, 1e-4, 1e-5, 1e-6, 1e-7, 5e-8, 1e-8],
+        value=1e-5,
+        format_func=lambda x: f"{x:.2e}"
+    )
+    st.caption("💡 Tip: Relaxing the threshold to 1e-5 or 1e-4 increases overlapping variant counts between diverse populations.")
 
 if st.button("🚀 Run Harmonization & Comparison", type="primary"):
     base_url = "https://api.opengwas.io/api"
     headers = {"Authorization": f"Bearer {api_token}", "Accept": "application/json"}
 
     with st.status("Running Bioinformatics Pipeline...", expanded=True) as status:
-        st.write(f"1️⃣ Fetching Top Hits from {id1}...")
-        res1 = requests.post(f"{base_url}/tophits", json={"id": [id1]}, headers=headers)
+        
+        # --- STRATEGY 1: FULL VARIANT SCAN & THRESHOLDING ---
+        if "Strict p-Value" in strategy:
+            st.write(f"1️⃣ Scanning Study {id1} by p-value threshold (< {p_threshold:.2e})...")
+            # OpenGWAS associations endpoint allows querying by specific p-value boundaries
+            assoc_url = f"{base_url}/associations"
+            payload = {"id": [id1], "p_upper": p_threshold}
+            res1 = requests.post(assoc_url, json=payload, headers=headers)
+            
+        # --- STRATEGY 2: PRE-COMPUTED LEAD SNPS ---
+        else:
+            st.write(f"1️⃣ Fetching pre-computed genome-wide significant Top Hits from {id1}...")
+            tophits_url = f"{base_url}/tophits"
+            res1 = requests.post(tophits_url, json={"id": [id1]}, headers=headers)
         
         if res1.status_code == 200 and res1.json():
             df1 = pd.DataFrame(res1.json())
             if not df1.empty:
+                # Sort values strictly to isolate the absolute top signals up to user limit
                 df1 = df1.sort_values('p').head(snp_limit)
                 snp_list = df1['rsid'].tolist()
-                st.write(f"✅ Found {len(snp_list)} significant SNPs. Searching in {id2}...")
+                st.write(f"✅ Isolated {len(snp_list)} top candidate SNPs from Study 1. Querying targets in Study 2...")
                 
+                # Split rsIDs into chunks to prevent payload overflows
                 chunks = [snp_list[i:i + 60] for i in range(0, len(snp_list), 60)]
                 df2_list = []
                 
@@ -80,7 +101,7 @@ if st.button("🚀 Run Harmonization & Comparison", type="primary"):
                     
                 if df2_list:
                     df2 = pd.concat(df2_list, ignore_index=True)
-                    st.write(f"✅ Retrieved {len(df2)} matches. Starting Dual-Harmonization (Strand flip checks)...")
+                    st.write(f"✅ Retrieved {len(df2)} matches from Study 2. Starting Dual-Harmonization (Strand flip checks)...")
                     
                     df1 = df1.rename(columns={'beta': 'b', 'effect_allele': 'ea', 'other_allele': 'nea'})
                     df2 = df2.rename(columns={'beta': 'b', 'effect_allele': 'ea', 'other_allele': 'nea'})
@@ -107,7 +128,7 @@ if st.button("🚀 Run Harmonization & Comparison", type="primary"):
                     
                     status.update(label=f"Analysis Complete! {len(merged)} SNPs successfully harmonized.", state="complete", expanded=False)
                     
-                    # --- İSTATİSTİK VE GRAFİKLER ---
+                    # --- STATS AND PLOTLY CORRELATION CHARTS ---
                     r_beta, p_beta = pearsonr(merged['b_S1'], merged['harmonized_b_S2'])
                     r_eaf, p_eaf = pearsonr(merged['eaf_S1'], merged['harmonized_eaf_S2'])
 
@@ -139,7 +160,7 @@ if st.button("🚀 Run Harmonization & Comparison", type="primary"):
                     st.error("No overlapping SNPs found in Study 2. It might not contain full summary statistics.")
             else:
                 status.update(label="No significant SNPs.", state="error")
-                st.error("Study 1 returned an empty dataframe.")
+                st.error("Study 1 returned an empty dataframe for the selected criteria.")
         else:
             status.update(label="API Error", state="error")
-            st.error("Failed to fetch Top Hits from Study 1. Check ID or Token validity.")
+            st.error("Failed to fetch data from Study 1. Check ID, Strategy constraints, or Token validity.")
