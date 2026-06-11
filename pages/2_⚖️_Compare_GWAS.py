@@ -4,7 +4,7 @@ import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import time
-from scipy.stats import pearsonr
+from scipy.stats import pearsonr, linregress  # <-- linregress eklendi
 
 st.set_page_config(page_title="Compare GWAS", page_icon="⚖️", layout="wide")
 
@@ -47,7 +47,7 @@ if st.button("🚀 Run Harmonization & Comparison", type="primary"):
     with st.status("Running Bioinformatics Pipeline...", expanded=True) as status:
         st.write(f"1️⃣ Fetching pre-computed Top Hits from {id1}...")
         res1 = requests.post(f"{base_url}/tophits", json={"id": [id1]}, headers=headers)
-        
+
         if res1.status_code == 200 and res1.json():
             df1 = pd.DataFrame(res1.json())
             if not df1.empty:
@@ -55,11 +55,11 @@ if st.button("🚀 Run Harmonization & Comparison", type="primary"):
                 df1 = df1.sort_values('p').head(snp_limit)
                 snp_list = df1['rsid'].dropna().unique().tolist()
                 st.write(f"✅ Isolated {len(snp_list)} significant lead SNPs. Querying targets in {id2}...")
-                
+
                 # Split rsIDs into chunks of 60 to protect payload limits
                 chunks = [snp_list[i:i + 60] for i in range(0, len(snp_list), 60)]
                 df2_list = []
-                
+
                 progress_bar = st.progress(0)
                 for i, chunk in enumerate(chunks):
                     res2 = requests.post(f"{base_url}/associations", json={"id": [id2], "variant": chunk}, headers=headers)
@@ -67,19 +67,19 @@ if st.button("🚀 Run Harmonization & Comparison", type="primary"):
                         df2_list.append(pd.DataFrame(res2.json()))
                     progress_bar.progress((i + 1) / len(chunks))
                     time.sleep(0.5)
-                    
+
                 if df2_list:
                     df2 = pd.concat(df2_list, ignore_index=True)
                     st.write(f"✅ Retrieved {len(df2)} matches from Study 2. Aligning strands...")
-                    
+
                     # Standardize column mappings across both dataframes
                     df1 = df1.rename(columns={'beta': 'b', 'effect_allele': 'ea', 'other_allele': 'nea'})
                     df2 = df2.rename(columns={'beta': 'b', 'effect_allele': 'ea', 'other_allele': 'nea'})
-                    
+
                     cols_to_keep = ['rsid', 'ea', 'nea', 'b', 'p', 'eaf']
                     df1_filtered = df1[[c for c in cols_to_keep if c in df1.columns]]
                     df2_filtered = df2[[c for c in cols_to_keep if c in df2.columns]]
-                    
+
                     merged = pd.merge(df1_filtered, df2_filtered, on='rsid', suffixes=('_S1', '_S2'))
 
                     if not merged.empty:
@@ -88,26 +88,42 @@ if st.button("🚀 Run Harmonization & Comparison", type="primary"):
                             b1, eaf1 = row['b_S1'], row['eaf_S1']
                             ea2, nea2 = str(row['ea_S2']).upper(), str(row['nea_S2']).upper()
                             b2, eaf2 = row['b_S2'], row['eaf_S2']
-                            
-                            if ea1 == ea2: 
+
+                            if ea1 == ea2:
                                 return pd.Series({'harm_b_S2': b2, 'harm_eaf_S2': eaf2})
-                            elif ea1 == nea2 and nea1 == ea2: 
+                            elif ea1 == nea2 and nea1 == ea2:
                                 return pd.Series({'harm_b_S2': -b2, 'harm_eaf_S2': 1 - eaf2})
-                            else: 
+                            else:
                                 return pd.Series({'harm_b_S2': None, 'harm_eaf_S2': None})
 
                         merged[['harmonized_b_S2', 'harmonized_eaf_S2']] = merged.apply(harmonize_all, axis=1)
                         merged = merged.dropna(subset=['harmonized_b_S2'])
-                        
+
                         if not merged.empty:
                             status.update(label=f"Analysis Complete! {len(merged)} SNPs successfully harmonized.", state="complete", expanded=False)
-                            
-                            # --- CALCULATE STATISTICS AND RENDER CORRELATION PLOTS ---
+
+                            # --- CALCULATE STATISTICS ---
                             r_beta, p_beta = pearsonr(merged['b_S1'], merged['harmonized_b_S2'])
                             r_eaf, p_eaf = pearsonr(merged['eaf_S1'], merged['harmonized_eaf_S2'])
 
+                            # --- NEW: OLS EFFECT-SIZE ATTENUATION REGRESSION ---
+                            # Target effect sizes (Study 2) regressed on the base effect sizes (Study 1).
+                            # A slope below 1.0 indicates effect-size attenuation in the target ancestry.
+                            reg = linregress(merged['b_S1'], merged['harmonized_b_S2'])
+                            slope = reg.slope
+                            intercept = reg.intercept
+                            r_squared = reg.rvalue ** 2
+                            attenuation = (1 - slope) * 100  # % attenuation, as defined in the thesis
+
+                            # Headline metrics for the attenuation result
+                            m1, m2, m3 = st.columns(3)
+                            m1.metric("Regression Slope (β)", f"{slope:.3f}")
+                            m2.metric("Effect-Size Attenuation", f"{attenuation:.1f}%")
+                            m3.metric("Regression R²", f"{r_squared:.3f}")
+
+                            # --- RENDER PLOTS ---
                             fig = make_subplots(rows=1, cols=2, subplot_titles=(
-                                f"<b>Beta Correlation</b><br><span style='font-size:12px;color:gray'>r = {r_beta:.3f} | p = {p_beta:.2e}</span>", 
+                                f"<b>Beta Regression</b><br><span style='font-size:12px;color:gray'>slope = {slope:.3f} ({attenuation:.1f}% attenuation) | r = {r_beta:.3f}</span>",
                                 f"<b>Allele Frequency (EAF)</b><br><span style='font-size:12px;color:gray'>r = {r_eaf:.3f} | p = {p_eaf:.2e}</span>"
                             ))
 
@@ -115,7 +131,15 @@ if st.button("🚀 Run Harmonization & Comparison", type="primary"):
                             fig.add_trace(go.Scatter(x=merged['eaf_S1'], y=merged['harmonized_eaf_S2'], mode='markers', text=merged['rsid'], marker=dict(color='#EF553B', opacity=0.7), name='EAF'), row=1, col=2)
 
                             b_min, b_max = min(merged['b_S1'].min(), merged['harmonized_b_S2'].min()), max(merged['b_S1'].max(), merged['harmonized_b_S2'].max())
+
+                            # Black dashed line = perfect transferability (slope = 1, y = x)
                             fig.add_shape(type="line", x0=b_min, y0=b_min, x1=b_max, y1=b_max, line=dict(color="black", dash="dash"), row=1, col=1)
+                            # Red solid line = fitted OLS regression (observed attenuation)
+                            fig.add_shape(type="line",
+                                          x0=b_min, y0=slope * b_min + intercept,
+                                          x1=b_max, y1=slope * b_max + intercept,
+                                          line=dict(color="#EF553B", width=2), row=1, col=1)
+
                             fig.add_shape(type="line", x0=0, y0=0, x1=1, y1=1, line=dict(color="black", dash="dash"), row=1, col=2)
 
                             fig.update_layout(height=500, showlegend=False, template="plotly_white")
@@ -125,7 +149,8 @@ if st.button("🚀 Run Harmonization & Comparison", type="primary"):
                             fig.update_yaxes(title_text="Study 2 EAF (Harmonized)", row=1, col=2)
 
                             st.plotly_chart(fig, use_container_width=True)
-                            
+                            st.caption("Beta panel: the black dashed line marks perfect transferability (slope = 1); the red line is the fitted OLS regression. The vertical gap between them is the effect-size attenuation.")
+
                             st.subheader("Harmonized Dataset")
                             st.dataframe(merged[['rsid', 'ea_S1', 'nea_S1', 'b_S1', 'harmonized_b_S2', 'eaf_S1', 'harmonized_eaf_S2', 'p_S1']], use_container_width=True)
                         else:
